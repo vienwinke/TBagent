@@ -43,7 +43,11 @@ pip install -r requirements.txt
 
 cp .env.example .env            # 填 DEEPSEEK_API_KEY（DB 连接已在 .env，直连 3306）
 python -m agent.schema_index --build           # 建 Schema 检索索引
-streamlit run app.py                          # M4 完成后可用
+streamlit run app.py                          # 打开 http://localhost:8501 提问
+
+# 界面能看到什么：一句话答案 · 结果表 · 自动图表（折线/柱状/饼图/大数字）
+#                 · 生成的 SQL（可折叠）· Schema 检索命中表 · 耗时/tokens/成本
+#                 · 护栏动作提示（已脱敏 / 结果截断 / 自动补 LIMIT）
 ```
 
 > 环境细节（Python 版本、数据库直连、向量后端切换、自检命令）见 [docs/开发环境.md](docs/开发环境.md)。
@@ -84,7 +88,7 @@ data/         schema.json · faiss.index · chunks.json · cache/
 - [x] M0 骨架：config/llm（重试+token/成本）/executor（只读沙箱+脱敏+EXPLAIN 成本护栏）
 - [x] M1 Schema 抽取与检索（15 表/141 列含中文描述；Schema Top-5 召回 12/12 = 100%）
 - [x] M2 NL2SQL + 三层护栏 + 回环修复（护栏单测 16/16 危险 SQL 全拦截；回环修复 5 类场景通过）
-- [ ] M3 知识库 RAG + 意图路由
-- [ ] M4 自动图表 + Streamlit 界面
+- [ ] M3 知识库 RAG + 意图路由（M4 已实现规则版路由：`agent/router.py`，M3 升级为 LLM 分类 + 知识分支）
+- [x] M4 自动图表 + Streamlit 界面（`agent/chart.py` 选图规则 + `app.py`，含成本面板与护栏提示）
 - [x] M5 60 条评估集 + 跑分 + 消融（**EX 严格 90.2% / 宽松 94.1%**；危险操作执行率 0%；脱敏 100%）
 - [ ] M6 部署 + README 指标表 + 演示视频
