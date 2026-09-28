@@ -4,6 +4,15 @@
 > 问一句中文，自动理解意图 → 检索相关表与业务规则 → 生成**只读安全的 SQL** → 执行 → 出表 + 出图 + 给引用，
 > 并且每个答案都附带 **SQL、数据来源、耗时与成本**。
 
+| 项 | 链接 / 说明 |
+|---|---|
+| **仓库** | https://github.com/vienwinke/TBagent |
+| 在线演示 | *（Streamlit Community Cloud 部署后填这里）* |
+| 本地运行 | `streamlit run app.py` → http://localhost:8501 |
+| 部署步骤 | [docs/部署.md](docs/部署.md)（Cloud / HF Spaces / Docker 三选一） |
+| 评估报告 | [docs/评估报告.md](docs/评估报告.md)（数据分支 EX 90.2% · 知识分支命中率 100%） |
+| 面试讲稿 | [docs/面试讲稿.md](docs/面试讲稿.md) |
+
 ## 为什么这个项目值得看（面试向）
 
 | 技术点 | 做法 | 可量化的效果 |
