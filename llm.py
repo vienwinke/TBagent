@@ -120,7 +120,7 @@ def chat(
             latency = time.time() - started
             if resp.usage:
                 USAGE.add(use_model, resp.usage.prompt_tokens or 0, resp.usage.completion_tokens or 0, latency)
-            logger.debug("[llm] %s model=%s %.2fs tokens=%s", tag or "chat", use_model, latency,
+            logger.debug("[llm] {} model={} {}s tokens={}", tag or "chat", use_model, latency,
                          getattr(resp.usage, "total_tokens", "-"))
             return (resp.choices[0].message.content or "").strip()
         except BaseException as exc:  # noqa: BLE001
@@ -129,7 +129,7 @@ def chat(
                 break
             USAGE.retries += 1
             wait = min(2 ** attempt + random.uniform(0, 0.5), 20)
-            logger.warning("[llm] 第 %d 次失败(%s)，%.1fs 后重试: %s", attempt + 1, type(exc).__name__, wait,
+            logger.warning("[llm] 第 {} 次失败({})，{}s 后重试: {}", attempt + 1, type(exc).__name__, wait,
                            str(exc)[:120])
             time.sleep(wait)
     raise LLMError("模型调用失败（尝试 %d 次）: %s: %s" % (attempts, type(last_exc).__name__,

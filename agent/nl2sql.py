@@ -85,7 +85,7 @@ def answer(
     hits = idx.search(question, top_k)
     res.tables = [h.table for h in hits]
     schema_text = idx.describe(res.tables)
-    logger.debug("[nl2sql] 检索到表: %s", res.tables)
+    logger.debug("[nl2sql] 检索到表: {}", res.tables)
 
     error: str | None = None
     prev_sql: str | None = None
@@ -98,7 +98,7 @@ def answer(
             sql, reason = _extract(raw)
         except Exception as exc:  # noqa: BLE001
             error, res.stage = "生成阶段失败: %s" % str(exc)[:200], "generate"
-            logger.warning("[nl2sql] 第 %d 次生成失败: %s", res.attempts, error)
+            logger.warning("[nl2sql] 第 {} 次生成失败: {}", res.attempts, error)
             continue
 
         # 3) 护栏① 静态校验
@@ -107,7 +107,7 @@ def answer(
             g = sql_guard.validate(sql)
         except sql_guard.SqlGuardError as exc:
             error, prev_sql = "静态校验未通过: %s" % exc, sql
-            logger.warning("[nl2sql] 第 %d 次被护栏拦截: %s", res.attempts, exc)
+            logger.warning("[nl2sql] 第 {} 次被护栏拦截: {}", res.attempts, exc)
             continue
 
         res.sql, res.reason, res.guard = g.sql, reason, g.summary()
@@ -121,14 +121,14 @@ def answer(
             qr = ex.execute_readonly(g.sql, check_cost=False)
         except ex.SqlError as exc:
             error, prev_sql = "执行失败: %s" % exc, g.sql
-            logger.warning("[nl2sql] 第 %d 次执行失败: %s", res.attempts, exc)
+            logger.warning("[nl2sql] 第 {} 次执行失败: {}", res.attempts, exc)
             continue
 
         res.query, res.rows = qr.summary(), qr.as_dicts()
         if qr.row_count == 0 and attempt < max_repair:
             error = "查询返回 0 行：条件或枚举值可能不对（例如状态值、时间范围）"
             prev_sql = g.sql
-            logger.info("[nl2sql] 第 %d 次返回 0 行，触发回环修复", res.attempts)
+            logger.info("[nl2sql] 第 {} 次返回 0 行，触发回环修复", res.attempts)
             continue
         res.stage = "done"
         break

@@ -149,7 +149,7 @@ def execute_readonly(
     result.columns, result.rows = columns, rows
     result.row_count, result.masked_columns = len(rows), masked_cols
     result.elapsed_ms = int((time.time() - started) * 1000)
-    logger.debug("[exec] %d 行 / %dms / 脱敏列=%s / 预估扫描=%s",
+    logger.debug("[exec] {} 行 / {}ms / 脱敏列={} / 预估扫描={}",
                  result.row_count, result.elapsed_ms, masked_cols, result.explain_rows)
     return result
 
