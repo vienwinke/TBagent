@@ -75,7 +75,7 @@ def client() -> OpenAI:
     global _client
     if _client is None:
         if not LLM.configured:
-            raise LLMError("未配置 DEEPSEEK_API_KEY：请在 .env 中填写后再调用模型")
+            raise LLMError("未配置 LLM_API_KEY（或 DEEPSEEK_API_KEY）：请在 .env 中填写后再调用模型")
         _client = OpenAI(api_key=LLM.api_key, base_url=LLM.base_url, timeout=LLM.timeout, max_retries=0)
     return _client
 
@@ -108,7 +108,7 @@ def chat(
         kwargs["response_format"] = {"type": "json_object"}
 
     if not LLM.configured:
-        raise LLMError("未配置 DEEPSEEK_API_KEY：请在 .env 中填写后再调用模型")
+        raise LLMError("未配置 LLM_API_KEY（或 DEEPSEEK_API_KEY）：请在 .env 中填写后再调用模型")
 
     attempts = 0
     last_exc: BaseException | None = None

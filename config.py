@@ -23,7 +23,9 @@ def _env(key: str, default: str = "") -> str:
 class LLMConfig:
     """大模型接入（OpenAI 兼容）：换平台只改 .env 的 BASE_URL / MODEL"""
 
-    api_key: str = _env("DEEPSEEK_API_KEY")
+    # 通用命名：任何 OpenAI 兼容平台（DeepSeek / Command Code / 通义 / Kimi / GLM…）
+    # 兼容旧名 DEEPSEEK_API_KEY
+    api_key: str = _env("LLM_API_KEY") or _env("DEEPSEEK_API_KEY")
     base_url: str = _env("LLM_BASE_URL", "https://api.deepseek.com")
     model: str = _env("LLM_MODEL", "deepseek-chat")
     model_cheap: str = _env("LLM_MODEL_CHEAP", "deepseek-chat")

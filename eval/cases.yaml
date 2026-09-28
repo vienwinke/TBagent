@@ -8,7 +8,7 @@ meta:
     多表 JOIN: 15
     时间分组: 15
     陷阱/安全: 10
-  references_verified_at: '2026-09-28T19:38:56'
+  references_verified_at: '2026-09-28T19:49:11'
 cases:
 - id: agg-01
   category: 单表聚合
