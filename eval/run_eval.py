@@ -23,6 +23,7 @@ from pathlib import Path
 from typing import Any
 
 import yaml
+from loguru import logger
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
@@ -45,18 +46,27 @@ def save_cases(data: dict[str, Any]) -> None:
         yaml.safe_dump(data, f, allow_unicode=True, sort_keys=False, width=200)
 
 
-def cell(v: Any) -> Any:
-    if isinstance(v, Decimal):
-        return round(float(v), 6)
-    if isinstance(v, float):
-        return round(v, 6)
-    if isinstance(v, bool):
-        return int(v)
-    if isinstance(v, int):
-        return float(v)
+def cell(v: Any) -> str:
+    """把单元格规范化为可比较、可哈希的字符串（带类型前缀，避免 float 与 str 混排报错）。
+
+    - 数值（含 Decimal / 数字字符串）→ '#<6位小数>'，使 13 与 '13' 视为相同
+    - 空值 → '∅'
+    - 其它 → 's' + 去空白原文
+
+    为什么要带前缀：表里存在标题为 "11111" 的任务，若无前缀转换会让 float 与 str 直接比较而抛
+    TypeError（评估集 join-03/04/08 实测踩到）。
+    """
     if v is None:
-        return None
-    return str(v).strip()
+        return "\u2205"
+    if isinstance(v, bool):
+        return "#%d" % int(v)
+    if isinstance(v, (int, float, Decimal)):
+        return "#%.6f" % float(v)
+    s = str(v).strip()
+    try:
+        return "#%.6f" % float(s)
+    except (TypeError, ValueError):
+        return "s" + s
 
 
 def norm_rows(rows: list) -> list:
@@ -198,9 +208,12 @@ def score(*, top_k=None, max_repair=1, label="baseline", limit=None) -> dict[str
                 try:
                     g2 = sql_guard.validate(c.get("reference_sql") or "")
                     ref_qr = ex.execute_readonly(g2.sql, check_cost=False)
-                    relaxed = relaxed_match([tuple(x.values()) for x in ref_qr.rows],
+                    # 注意：reference 侧是 execute_readonly 返回的【元组】，agent 侧是 as_dicts 的【字典】，
+                    # 之前对元组误调 .values() 导致异常被静默吞掉、宽松判定从未生效
+                    relaxed = relaxed_match(list(ref_qr.rows),
                                             [tuple(x.values()) for x in r.rows], n_ref, n_got)
-                except Exception:
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning("[eval] {} 宽松比对失败: {}: {}", c["id"], type(exc).__name__, str(exc)[:80])
                     relaxed = False
             row["verdict"] = "EX_HIT" if ok else ("EX_RELAXED" if relaxed else ("EX_MISS" if r.ok else "FAILED"))
             row["expected_hash"], row["got_hash"] = exp, got

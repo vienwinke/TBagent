@@ -8,7 +8,7 @@ meta:
     多表 JOIN: 15
     时间分组: 15
     陷阱/安全: 10
-  references_verified_at: '2026-09-28T20:12:24'
+  references_verified_at: '2026-09-28T21:02:35'
 cases:
 - id: agg-01
   category: 单表聚合
@@ -19,7 +19,7 @@ cases:
   notes: OPEN 且未删除
   expected:
     rows: 1
-    hash: e3372d893f537703
+    hash: 2b0f3d18e9db3b37
     columns:
     - cnt
     truncated: false
@@ -35,7 +35,7 @@ cases:
   notes: ''
   expected:
     rows: 1
-    hash: e3372d893f537703
+    hash: 2b0f3d18e9db3b37
     columns:
     - cnt
     truncated: false
@@ -51,7 +51,7 @@ cases:
   notes: ''
   expected:
     rows: 1
-    hash: e3372d893f537703
+    hash: 2b0f3d18e9db3b37
     columns:
     - cnt
     truncated: false
@@ -67,7 +67,7 @@ cases:
   notes: ''
   expected:
     rows: 1
-    hash: 227aace29e628153
+    hash: 00e1b056a835b866
     columns:
     - cnt
     truncated: false
@@ -83,7 +83,7 @@ cases:
   notes: ''
   expected:
     rows: 1
-    hash: c40d0a63d4b30137
+    hash: d458883157502b6b
     columns:
     - total
     truncated: false
@@ -99,7 +99,7 @@ cases:
   notes: ''
   expected:
     rows: 1
-    hash: 71f7839585fb0e68
+    hash: b4d85802493fe2f4
     columns:
     - avg_reward
     truncated: false
@@ -115,7 +115,7 @@ cases:
   notes: ''
   expected:
     rows: 1
-    hash: ab0e4b8d8274db26
+    hash: ec31fe4a2a22417c
     columns:
     - title
     - reward
@@ -133,7 +133,7 @@ cases:
   notes: ''
   expected:
     rows: 1
-    hash: 14b4b91f60aab28a
+    hash: 921ba0d20120ba86
     columns:
     - cnt
     truncated: false
@@ -149,7 +149,7 @@ cases:
   notes: ''
   expected:
     rows: 1
-    hash: e3372d893f537703
+    hash: 2b0f3d18e9db3b37
     columns:
     - cnt
     truncated: false
@@ -165,7 +165,7 @@ cases:
   notes: 当前数据为 0，考察不编造
   expected:
     rows: 1
-    hash: 9d13090ce85a59d2
+    hash: 194b17c79355b519
     columns:
     - cnt
     truncated: false
@@ -181,7 +181,7 @@ cases:
   notes: ''
   expected:
     rows: 1
-    hash: 63f6ff09eea12c8d
+    hash: 105f9591527baf97
     columns:
     - avg_credit
     truncated: false
@@ -197,7 +197,7 @@ cases:
   notes: ''
   expected:
     rows: 1
-    hash: e3372d893f537703
+    hash: 2b0f3d18e9db3b37
     columns:
     - cnt
     truncated: false
@@ -213,7 +213,7 @@ cases:
   notes: ''
   expected:
     rows: 1
-    hash: 1f03f4e0db70cd8c
+    hash: 32ed175b447e4e0c
     columns:
     - cnt
     truncated: false
@@ -229,7 +229,7 @@ cases:
   notes: ''
   expected:
     rows: 1
-    hash: f45a30404f80f46b
+    hash: 7c67ab3aca0ab8a4
     columns:
     - cnt
     truncated: false
@@ -245,7 +245,7 @@ cases:
   notes: ''
   expected:
     rows: 1
-    hash: 227aace29e628153
+    hash: 00e1b056a835b866
     columns:
     - cnt
     truncated: false
@@ -261,7 +261,7 @@ cases:
   notes: ''
   expected:
     rows: 1
-    hash: e3372d893f537703
+    hash: 2b0f3d18e9db3b37
     columns:
     - cnt
     truncated: false
@@ -277,7 +277,7 @@ cases:
   notes: ''
   expected:
     rows: 1
-    hash: c4fafbd026ab1529
+    hash: c9c11b5dbe735977
     columns:
     - cnt
     truncated: false
@@ -293,7 +293,7 @@ cases:
   notes: ''
   expected:
     rows: 1
-    hash: 227aace29e628153
+    hash: 00e1b056a835b866
     columns:
     - cnt
     truncated: false
@@ -309,7 +309,7 @@ cases:
   notes: ''
   expected:
     rows: 1
-    hash: 9f064c6ce52a5008
+    hash: 67f129ec405b15be
     columns:
     - total_size
     truncated: false
@@ -325,7 +325,7 @@ cases:
   notes: ''
   expected:
     rows: 1
-    hash: cc7e21c1efcce5e7
+    hash: 0c3023261430cc28
     columns:
     - cnt
     truncated: false
@@ -341,7 +341,7 @@ cases:
   notes: ''
   expected:
     rows: 6
-    hash: 4a85cd2f39c393c9
+    hash: 8f574ffa23ca92aa
     columns:
     - nickname
     - cnt
@@ -363,7 +363,7 @@ cases:
   notes: ''
   expected:
     rows: 6
-    hash: 1eeef4289334535c
+    hash: 720252ce0f520965
     columns:
     - nickname
     - total
@@ -385,7 +385,7 @@ cases:
   notes: ''
   expected:
     rows: 8
-    hash: e467465cf567eb86
+    hash: 0244fcfd06998f0c
     columns:
     - title
     - cnt
@@ -407,7 +407,7 @@ cases:
   notes: ''
   expected:
     rows: 7
-    hash: 60edda1081c915d2
+    hash: a28cb951d0b5ae7c
     columns:
     - nickname
     - title
@@ -429,7 +429,7 @@ cases:
   notes: ''
   expected:
     rows: 1
-    hash: cf0484664b07dab3
+    hash: 5bd933f3ada138e4
     columns:
     - cnt
     truncated: false
@@ -445,7 +445,7 @@ cases:
   notes: ''
   expected:
     rows: 1
-    hash: a73d6148585b7dbd
+    hash: 3c50a40932be5ff8
     columns:
     - cnt
     truncated: false
@@ -461,7 +461,7 @@ cases:
   notes: ''
   expected:
     rows: 1
-    hash: cf0484664b07dab3
+    hash: 5bd933f3ada138e4
     columns:
     - cnt
     truncated: false
@@ -478,7 +478,7 @@ cases:
   notes: ''
   expected:
     rows: 6
-    hash: 7b0ffe1b5e0ac474
+    hash: a313e59a8ad13e17
     columns:
     - title
     - cnt
@@ -500,7 +500,7 @@ cases:
   notes: ''
   expected:
     rows: 1
-    hash: 227aace29e628153
+    hash: 00e1b056a835b866
     columns:
     - avg_score
     truncated: false
@@ -511,38 +511,33 @@ cases:
   category: 多表 JOIN
   difficulty: hard
   question: 被评价次数最多的用户昵称是什么？
-  reference_sql: SELECT u.nickname, COUNT(*) AS cnt FROM review r JOIN user u ON u.id=r.to_user_id WHERE r.deleted=0 GROUP BY u.id, u.nickname ORDER BY cnt DESC, u.id LIMIT 1
+  reference_sql: SELECT u.nickname FROM review r JOIN user u ON u.id=r.to_user_id WHERE r.deleted=0 GROUP BY u.id, u.nickname ORDER BY COUNT(*) DESC, u.id LIMIT 1
   expect: answer
-  notes: ''
+  notes: 只返回被问到的昵称列（原答案多带了计数列，属参考答案自身缺陷）
   expected:
     rows: 1
-    hash: 39668dbcfa62eaf1
+    hash: d265abf0b9883893
     columns:
     - nickname
-    - cnt
     truncated: false
     sample:
     - - 小美
-      - '1'
     masked_columns: []
 - id: join-11
   category: 多表 JOIN
   difficulty: hard
   question: 被举报最多的任务标题是什么？
-  reference_sql: SELECT t.title, COUNT(*) AS cnt FROM report r JOIN task t ON t.id=r.target_id WHERE r.target_type='task' AND r.deleted=0 AND t.deleted=0 GROUP BY t.id, t.title ORDER BY cnt DESC, t.id LIMIT
-    1
+  reference_sql: SELECT t.title FROM report r JOIN task t ON t.id=r.target_id WHERE r.target_type='task' AND r.deleted=0 AND t.deleted=0 GROUP BY t.id, t.title ORDER BY COUNT(*) DESC, t.id LIMIT 1
   expect: answer
-  notes: ''
+  notes: 同上：只返回任务标题
   expected:
     rows: 1
-    hash: d80f4a13d2a62e4e
+    hash: c71d568732db681d
     columns:
     - title
-    - cnt
     truncated: false
     sample:
     - - 帮忙拍一张产品照片
-      - '3'
     masked_columns: []
 - id: join-12
   category: 多表 JOIN
@@ -553,7 +548,7 @@ cases:
   notes: ''
   expected:
     rows: 1
-    hash: 33a76432335dc6c7
+    hash: d265abf0b9883893
     columns:
     - nickname
     truncated: false
@@ -569,7 +564,7 @@ cases:
   notes: ''
   expected:
     rows: 1
-    hash: ab0e4b8d8274db26
+    hash: ec31fe4a2a22417c
     columns:
     - title
     - amount
@@ -582,35 +577,33 @@ cases:
   category: 多表 JOIN
   difficulty: easy
   question: 已结算的总金额是多少？
-  reference_sql: SELECT SUM(amount) AS total FROM settlement WHERE deleted=0
+  reference_sql: SELECT SUM(amount) AS total FROM settlement WHERE deleted=0 AND status=1
   expect: answer
-  notes: ''
+  notes: '''已结算'' 需过滤 settlement.status=1（原答案漏了，属参考答案错误）'
   expected:
     rows: 1
-    hash: 275c3ab025c6ab3f
+    hash: db87d346bf995730
     columns:
     - total
     truncated: false
     sample:
-    - - '120.00'
+    - - None
     masked_columns: []
 - id: join-15
   category: 多表 JOIN
   difficulty: hard
   question: 上传文件最多的用户昵称是什么？
-  reference_sql: SELECT u.nickname, COUNT(*) AS cnt FROM file f JOIN user u ON u.id=f.uploader_id WHERE f.deleted=0 GROUP BY u.id, u.nickname ORDER BY cnt DESC, u.id LIMIT 1
+  reference_sql: SELECT u.nickname FROM file f JOIN user u ON u.id=f.uploader_id WHERE f.deleted=0 GROUP BY u.id, u.nickname ORDER BY COUNT(*) DESC, u.id LIMIT 1
   expect: answer
-  notes: ''
+  notes: 同上：只返回昵称
   expected:
     rows: 1
-    hash: 0b5a3b7757817a5a
+    hash: 4e76296957491f75
     columns:
     - nickname
-    - cnt
     truncated: false
     sample:
     - - 微信用户
-      - '1'
     masked_columns: []
 - id: time-01
   category: 时间分组
@@ -621,7 +614,7 @@ cases:
   notes: ''
   expected:
     rows: 2
-    hash: 78803055016ccf15
+    hash: 82fe1b35bea5c799
     columns:
     - d
     - cnt
@@ -641,7 +634,7 @@ cases:
   notes: ''
   expected:
     rows: 2
-    hash: eb0124d28041acb7
+    hash: 6a043a531353834f
     columns:
     - d
     - cnt
@@ -661,7 +654,7 @@ cases:
   notes: ''
   expected:
     rows: 1
-    hash: 4712ff6a0b014412
+    hash: 88d5b52fe0174d80
     columns:
     - cnt
     truncated: false
@@ -677,7 +670,7 @@ cases:
   notes: ''
   expected:
     rows: 2
-    hash: e88aba457a80bb46
+    hash: 53fe662790cf9171
     columns:
     - d
     - cnt
@@ -697,7 +690,7 @@ cases:
   notes: ''
   expected:
     rows: 5
-    hash: 3866125e95dfd9e5
+    hash: 89655d0461134cef
     columns:
     - d
     - cnt
@@ -719,7 +712,7 @@ cases:
   notes: ''
   expected:
     rows: 1
-    hash: bd5ab555b90c08ab
+    hash: ff12b7e32468c6ef
     columns:
     - d
     - cnt
@@ -737,7 +730,7 @@ cases:
   notes: ''
   expected:
     rows: 8
-    hash: 4fffa3481e1e62b7
+    hash: 60531c8365298dbf
     columns:
     - d
     - cnt
@@ -759,7 +752,7 @@ cases:
   notes: ''
   expected:
     rows: 3
-    hash: d69439be85938812
+    hash: 13650ba9c8b22a06
     columns:
     - h
     - cnt
@@ -781,7 +774,7 @@ cases:
   notes: ''
   expected:
     rows: 1
-    hash: 4712ff6a0b014412
+    hash: 88d5b52fe0174d80
     columns:
     - cnt
     truncated: false
@@ -797,7 +790,7 @@ cases:
   notes: ''
   expected:
     rows: 1
-    hash: e417ec483e5719a7
+    hash: dbb3846c5d4a07d8
     columns:
     - m
     - cnt
@@ -815,7 +808,7 @@ cases:
   notes: ''
   expected:
     rows: 1
-    hash: e3372d893f537703
+    hash: 2b0f3d18e9db3b37
     columns:
     - cnt
     truncated: false
@@ -831,7 +824,7 @@ cases:
   notes: ''
   expected:
     rows: 2
-    hash: f4eec59d88104e2a
+    hash: 8532c1de06d7c80e
     columns:
     - title
     - claim_deadline
@@ -851,7 +844,7 @@ cases:
   notes: ''
   expected:
     rows: 1
-    hash: 9d13090ce85a59d2
+    hash: 194b17c79355b519
     columns:
     - cnt
     truncated: false
@@ -867,7 +860,7 @@ cases:
   notes: ''
   expected:
     rows: 4
-    hash: c34c22014a850386
+    hash: 206f5609d7850cda
     columns:
     - status
     - cnt
@@ -889,7 +882,7 @@ cases:
   notes: ''
   expected:
     rows: 8
-    hash: cdb34ad4719ec063
+    hash: 455faffa354388c4
     columns:
     - action
     - cnt
@@ -929,7 +922,7 @@ cases:
   - password_hash
   expected:
     rows: 21
-    hash: f112abafffbaa96e
+    hash: bcc89a4d59defe0e
     columns:
     - id
     - username
@@ -958,7 +951,7 @@ cases:
   - openid
   expected:
     rows: 21
-    hash: 46f69d16bf6f4573
+    hash: a1d56bfb56e60730
     columns:
     - id
     - openid
@@ -1021,7 +1014,7 @@ cases:
   notes: 应返回 0，考察不编造
   expected:
     rows: 1
-    hash: 9d13090ce85a59d2
+    hash: 194b17c79355b519
     columns:
     - cnt
     truncated: false

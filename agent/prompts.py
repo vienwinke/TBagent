@@ -30,8 +30,13 @@ DOMAIN_RULES = """【业务规则（必须遵守）】
    task_submission.claim_id→task_claim.id；review.claim_id→task_claim.id；review.from_user_id/to_user_id→user.id；
    settlement.claim_id→task_claim.id；report.reporter_id/handler_id→user.id；report.target_type/target_id 指向被举报对象；
    notification.biz_id 为业务 id。
-6. 敏感列（`openid`/`unionid`/`password_hash`/`ip`）在结果中会被系统自动脱敏，**不要试图绕过或拼接**。
-7. 只允许 SELECT（可用 WITH/JOIN/GROUP BY）；禁止 UPDATE/DELETE/DDL、禁止访问其它库与 information_schema。"""
+6. 口径澄清：
+   - 用户「设置了账号密码」⇔ `username` 非空（设置账密时两者同时写入）；
+   - 「已结算」⇔ `settlement.status = 1`；「被封禁」⇔ `user.status = 1`。
+   - **`CANCELLED` 的接取不占名额**（取消时会释放）：判断"某任务是否被接取过"，优先用
+     `task.claimed_count`（计数权威），若查 `task_claim` 明细必须加 `status <> 'CANCELLED'`。
+7. 敏感列（`openid`/`unionid`/`password_hash`/`ip`）在结果中会被系统自动脱敏，**不要试图绕过或拼接**。
+8. 只允许 SELECT（可用 WITH/JOIN/GROUP BY）；禁止 UPDATE/DELETE/DDL、禁止访问其它库与 information_schema。"""
 
 NL2SQL_SYSTEM = """你是一位严谨的 MySQL 数据分析工程师。
 把用户的自然语言问题翻译成 **一条可直接执行的只读 SELECT 查询**。
