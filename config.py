@@ -1,4 +1,4 @@
-﻿# -*- coding: utf-8 -*-
+# -*- coding: utf-8 -*-
 """全局配置：环境变量 + 护栏参数 + 模型档位 + 单价表
 
 所有可调项集中在 .env；代码里不出现魔法数字。
@@ -85,3 +85,15 @@ GUARD = GuardConfig()
 
 SCHEMA_PATH = ROOT / "data" / "schema.json"
 INDEX_PATH = ROOT / "data" / "schema_index.json"
+LOG_LEVEL = _env("LOG_LEVEL", "INFO").upper()
+
+
+def setup_logging() -> None:
+    """统一日志格式与级别（.env 的 LOG_LEVEL 可调；DEBUG 会打印每条执行明细）"""
+    import sys
+
+    from loguru import logger
+
+    logger.remove()
+    logger.add(sys.stderr, level=LOG_LEVEL,
+               format="<green>{time:HH:mm:ss}</green> | <level>{level: <7}</level> | {message}")

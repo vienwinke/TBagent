@@ -16,6 +16,7 @@ from dataclasses import dataclass, field
 from typing import Any, Callable
 
 from loguru import logger
+from config import setup_logging
 
 import llm as llm_mod
 from agent import executor as ex
@@ -146,6 +147,7 @@ def answer(
 
 
 def main() -> None:
+    setup_logging()
     import argparse
     import json
 

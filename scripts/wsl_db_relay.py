@@ -1,4 +1,4 @@
-﻿# -*- coding: utf-8 -*-
+# -*- coding: utf-8 -*-
 """WSL 侧 MySQL TCP 中继（纯标准库，零依赖）
 
 为什么需要它：

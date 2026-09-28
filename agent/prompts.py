@@ -11,22 +11,27 @@ from __future__ import annotations
 
 # 业务规则：从 schema.json / AGENTS.md 提炼，避免模型瞎猜枚举值
 DOMAIN_RULES = """【业务规则（必须遵守）】
-数据库：MySQL 8，库名 treatbord（任务接取平台），共 14 张业务表。
-1. 逻辑删除：几乎所有表都有 `deleted` 字段，查询务必加 `deleted = 0`（除非统计历史留存）。
-2. 状态枚举（字符串，注意大小写）：
-   - task.status: OPEN(待接取) / IN_PROGRESS(进行中) / REVIEWING(待确认) / SETTLED(已完成) / EXPIRED(已关闭-过期) / CANCELLED(已关闭-取消)
-   - task_claim.status: CLAIMED(已接取) / SUBMITTED(已提交) / APPROVED(已通过) / REJECTED(已驳回) / CANCELLED(已取消)
-   - report.status: PENDING(待处理) / HANDLED(已处理) / REJECTED(已驳回)
-   - user.status: 0=正常 1=封禁；user.role: 0=普通用户 1=管理员
-   - notification.is_read: 0=未读 1=已读
-3. 金额字段 `reward`/`amount` 是 DECIMAL(10,2)，求和用 SUM()。
-4. 时间字段是 DATETIME（Asia/Shanghai）。"最近 7 天" 用 `create_time >= DATE_SUB(CURDATE(), INTERVAL 7 DAY)`。
-5. 表关系：
-   task.publisher_id → user.id；task_claim.task_id → task.id；task_claim.user_id → user.id；
-   task_submission.claim_id → task_claim.id；review.claim_id → task_claim.id；
-   settlement.claim_id → task_claim.id。
-6. 敏感列（openid/unionid/password_hash/ip）在结果里会被系统自动脱敏，**不要试图绕过**。
-7. 只允许 SELECT；不要写 UPDATE/DELETE/DDL，不要访问其它库。"""
+数据库：MySQL 8，库名 treatbord（任务接取平台），14 张业务表。
+1. 逻辑删除：`user/task/task_claim/task_submission/file/notification/review/report/settlement` 有 `deleted` 字段，
+   查询务必加 `deleted = 0`。日志类表（`audit_log`/`login_log`/`task_status_log`/`claim_status_log`/`app_config`）**没有** `deleted`。
+2. 状态枚举（注意大小写与类型）：
+   - task.status VARCHAR: OPEN(待接取) / IN_PROGRESS(进行中) / REVIEWING(待确认) / SETTLED(已完成) / EXPIRED(已关闭-过期) / CANCELLED(已关闭-取消)
+   - task_claim.status VARCHAR: CLAIMED(已接取) / SUBMITTED(已提交) / APPROVED(已通过) / REJECTED(已驳回) / CANCELLED(已取消)
+   - user.status TINYINT: 0=正常 1=封禁；user.role TINYINT: 0=普通用户 1=管理员
+   - notification.is_read TINYINT: 0=未读 1=已读
+   - report.status TINYINT: 0=待处理 1=已处理
+   - settlement.status TINYINT: 0=未结算 1=已结算
+   - file.sec_status TINYINT: 0=待检测 1=通过 2=不通过
+   - login_log.success TINYINT: 1=成功 0=失败，失败原因在 fail_reason（如 LOGIN_LOCKED）
+3. 金额字段 `task.reward`/`task_claim.reward`/`settlement.amount` 为 DECIMAL，聚合用 SUM()/AVG()。
+4. 时间字段为 DATETIME（Asia/Shanghai）。"最近 7 天"= `create_time >= DATE_SUB(CURDATE(), INTERVAL 7 DAY)`；
+   "今天"= `DATE(create_time) = CURDATE()`；按月用 `DATE_FORMAT(create_time, '%%Y-%%m')`。
+5. 表关系：task.publisher_id→user.id；task_claim.task_id→task.id；task_claim.user_id→user.id；
+   task_submission.claim_id→task_claim.id；review.claim_id→task_claim.id；review.from_user_id/to_user_id→user.id；
+   settlement.claim_id→task_claim.id；report.reporter_id/handler_id→user.id；report.target_type/target_id 指向被举报对象；
+   notification.biz_id 为业务 id。
+6. 敏感列（`openid`/`unionid`/`password_hash`/`ip`）在结果中会被系统自动脱敏，**不要试图绕过或拼接**。
+7. 只允许 SELECT（可用 WITH/JOIN/GROUP BY）；禁止 UPDATE/DELETE/DDL、禁止访问其它库与 information_schema。"""
 
 NL2SQL_SYSTEM = """你是一位严谨的 MySQL 数据分析工程师。
 把用户的自然语言问题翻译成 **一条可直接执行的只读 SELECT 查询**。

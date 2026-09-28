@@ -1,4 +1,4 @@
-﻿# -*- coding: utf-8 -*-
+# -*- coding: utf-8 -*-
 """Schema 检索（M1）：把 15 张表做成可检索索引，只把 Top-K 相关表注入提示词
 
 为什么需要：14 张业务表全塞进 prompt 既贵又容易让模型选错表。
@@ -20,7 +20,7 @@ import re
 from dataclasses import dataclass
 from typing import Any
 
-from config import GUARD, INDEX_PATH, SCHEMA_PATH, SYSTEM_TABLES
+from config import GUARD, INDEX_PATH, SCHEMA_PATH, SYSTEM_TABLES, setup_logging
 
 
 # 领域别名：把业务口语映射到表（BM25 对"表名/字段名精确匹配"友好，但口语需要额外线索）
@@ -142,6 +142,7 @@ class SchemaIndex:
 
 
 def main() -> None:
+    setup_logging()
     parser = argparse.ArgumentParser(description="Schema 检索索引")
     parser.add_argument("--build", action="store_true", help="构建索引")
     parser.add_argument("--query", type=str, help="检索相关表")
