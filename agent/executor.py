@@ -47,7 +47,9 @@ class QueryResult:
     rows: list[tuple] = field(default_factory=list)
     row_count: int = 0
     truncated: bool = False
-    masked_columns: list[str] = field(default_factory=list)
+    masked_columns: list[str] = field(default_factory=list)        # 命中的【源敏感列名】（如 openid）
+    masked_output_columns: list[str] = field(default_factory=list)  # 实际被替换的输出列名（可能是别名）
+    sensitive_columns: list[str] = field(default_factory=list)      # 同 masked_columns，供评估使用
     explain_rows: int | None = None
     elapsed_ms: int = 0
 
@@ -57,7 +59,8 @@ class QueryResult:
     def summary(self) -> dict[str, Any]:
         return {
             "columns": self.columns, "row_count": self.row_count, "truncated": self.truncated,
-            "masked_columns": self.masked_columns, "explain_rows": self.explain_rows,
+            "masked_columns": self.masked_columns, "masked_output_columns": self.masked_output_columns,
+            "sensitive_columns": self.sensitive_columns, "explain_rows": self.explain_rows,
             "elapsed_ms": self.elapsed_ms,
         }
 
@@ -98,18 +101,62 @@ def explain_rows(cur: pymysql.cursors.Cursor, sql: str) -> int:
     return 0 if seen == 0 else total
 
 
-def mask_rows(columns: Sequence[str], rows: Iterable[Sequence[Any]]) -> tuple[list[tuple], list[str]]:
-    """结果脱敏：敏感列一律替换为 [已脱敏]"""
-    hit = [i for i, c in enumerate(columns) if c.lower() in SENSITIVE_COLUMNS]
-    if not hit:
+def sensitive_positions(sql: str, columns: Sequence[str]) -> tuple[list[int], list[str]]:
+    """定位需要脱敏的结果列。
+
+    为什么不能只看结果列名：模型会给敏感列起别名（`openid AS 微信openid`）或用表达式包住
+    （`CASE WHEN password_hash IS NULL ...`），此时结果列名不再是敏感列名 → 按名字匹配会被绕过。
+    因此以 **SQL AST 的投影位置**为准：第 i 个投影引用了敏感列 → 脱敏第 i 列；
+    无法用 AST 判定（SELECT *、投影数与结果列数不一致、解析失败）时，退化为列名匹配。
+    """
+    import sqlglot
+    from sqlglot import exp
+
+    hit: set[int] = set()
+    names: set[str] = set()
+    try:
+        root = sqlglot.parse_one(sql, read="mysql")
+        select = root if isinstance(root, exp.Select) else root.find(exp.Select)
+        if select is not None:
+            projections = list(select.expressions)
+            has_star = any(isinstance(pr, exp.Star) for pr in projections)
+            if not has_star and len(projections) == len(columns):
+                for i, proj in enumerate(projections):
+                    found = {(c.name or "").lower() for c in proj.find_all(exp.Column)} & SENSITIVE_COLUMNS
+                    if found:
+                        hit.add(i)
+                        names |= found
+                return sorted(hit), sorted(names)
+    except Exception:  # noqa: BLE001
+        pass
+
+    # 兜底：列名精确匹配；较长敏感名（>=6 字符，如 openid/password_hash/unionid）允许子串命中别名；
+    # `ip` 这类短名必须精确匹配，否则 description 之类的列会被误伤
+    for i, col in enumerate(columns):
+        low = (col or "").lower()
+        for s in SENSITIVE_COLUMNS:
+            if low == s or (len(s) >= 6 and s in low):
+                hit.add(i)
+                names.add(s)
+    return sorted(hit), sorted(names)
+
+
+def mask_rows(columns: Sequence[str], rows: Iterable[Sequence[Any]],
+              positions: Sequence[int] | None = None) -> tuple[list[tuple], list[str]]:
+    """结果脱敏：把指定位置（缺省则按列名判定）的值替换为 [已脱敏]"""
+    if positions is None:
+        positions, _ = sensitive_positions("", columns)
+    idx = list(positions)
+    if not idx:
         return [tuple(r) for r in rows], []
     masked = []
     for r in rows:
         row = list(r)
-        for i in hit:
-            row[i] = MASK
+        for i in idx:
+            if i < len(row):
+                row[i] = MASK
         masked.append(tuple(row))
-    return masked, [columns[i] for i in hit]
+    return masked, [columns[i] for i in idx if i < len(columns)]
 
 
 def execute_readonly(
@@ -145,12 +192,18 @@ def execute_readonly(
     if len(raw) > limit:
         result.truncated = True
         raw = raw[:limit]
-    rows, masked_cols = mask_rows(columns, raw)
+    positions, source_names = sensitive_positions(sql, columns)
+    rows, output_cols = mask_rows(columns, raw, positions)
+    # 对评估与排查而言，"命中了哪个敏感列"（openid）比"输出列叫什么"（可能是别名）更有意义
+    result.masked_columns = source_names or output_cols
+    result.masked_output_columns = output_cols
+    result.sensitive_columns = source_names
     result.columns, result.rows = columns, rows
-    result.row_count, result.masked_columns = len(rows), masked_cols
+    result.row_count = len(rows)
     result.elapsed_ms = int((time.time() - started) * 1000)
-    logger.debug("[exec] {} 行 / {}ms / 脱敏列={} / 预估扫描={}",
-                 result.row_count, result.elapsed_ms, masked_cols, result.explain_rows)
+    logger.debug("[exec] {} 行 / {}ms / 命中敏感列={} / 脱敏输出列={} / 预估扫描={}",
+                 result.row_count, result.elapsed_ms, result.masked_columns,
+                 result.masked_output_columns, result.explain_rows)
     return result
 
 

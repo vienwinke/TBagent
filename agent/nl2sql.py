@@ -38,6 +38,7 @@ class Nl2SqlResult:
     rows: list[dict[str, Any]] = field(default_factory=list)
     attempts: int = 0
     repaired: bool = False
+    raw_sqls: list[str] = field(default_factory=list)   # 每次尝试模型给出的原始 SQL（未过护栏）
     error: str | None = None
     stage: str = "init"          # init|generate|guard|execute|done|failed
     usage: dict[str, Any] = field(default_factory=dict)
@@ -51,6 +52,7 @@ class Nl2SqlResult:
                 "tables": self.tables, "guard": self.guard, "query": self.query,
                 "row_count": self.query.get("row_count"), "attempts": self.attempts,
                 "repaired": self.repaired, "error": self.error, "stage": self.stage,
+                "raw_sqls": self.raw_sqls,
                 "usage": self.usage}
 
 
@@ -97,6 +99,7 @@ def answer(
         try:
             raw = call_llm(prompts.nl2sql_messages(schema_text, question, error=error, prev_sql=prev_sql))
             sql, reason = _extract(raw)
+            res.raw_sqls.append(sql)
         except Exception as exc:  # noqa: BLE001
             error, res.stage = "生成阶段失败: %s" % str(exc)[:200], "generate"
             logger.warning("[nl2sql] 第 {} 次生成失败: {}", res.attempts, error)
