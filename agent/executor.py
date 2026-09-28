@@ -13,18 +13,21 @@
 from __future__ import annotations
 
 import time
+from contextlib import closing
 from dataclasses import dataclass, field
 from typing import Any, Iterable, Sequence
 
 import pymysql
 from loguru import logger
 
-from config import DB, GUARD, SENSITIVE_COLUMNS
+from config import DB, GUARD, IS_SQLITE, SENSITIVE_COLUMNS
 
 MASK = "[已脱敏]"
 
 MYSQL_HINTS = {
     1792: "（会话为只读事务，写操作/DDL 已被 MySQL 拒绝）",
+    # SQLite（公开演示快照）保留同样语义
+    "sqlite_readonly": "（SQLite query_only 模式，写操作已被拒绝）",
     3024: "（执行超过 %dms 上限，已被中断）" % GUARD.timeout_ms,
     1146: "（表不存在）",
     1054: "（字段不存在）",
@@ -65,15 +68,46 @@ class QueryResult:
         }
 
 
-def connect() -> pymysql.connections.Connection:
+class _CursorCtx:
+    """统一 pymysql / sqlite3 游标的上下文管理器
+
+    pymysql 的 cursor 支持 `with`，而 sqlite3.Cursor 不支持（实测 TypeError），
+    因此统一包一层，保证两种后端都能 `with _CursorCtx(conn) as cur`。
+    """
+
+    def __init__(self, conn) -> None:
+        self.cur = conn.cursor()
+
+    def __enter__(self):
+        return self.cur
+
+    def __exit__(self, *exc_info) -> bool:
+        try:
+            self.cur.close()
+        except Exception:  # noqa: BLE001
+            pass
+        return False
+
+
+def connect():
+    """连接只读数据源：MySQL（真实评估）或 SQLite（公开演示快照）"""
+    if IS_SQLITE:
+        import sqlite3
+
+        conn = sqlite3.connect(DB.sqlite_path, timeout=max(1.0, GUARD.timeout_ms / 1000.0))
+        conn.execute("PRAGMA query_only = ON")       # 等价于会话级只读（护栏②）
+        conn.execute("PRAGMA busy_timeout = %d" % GUARD.timeout_ms)
+        return conn
     return pymysql.connect(
         host=DB.host, port=DB.port, user=DB.user, password=DB.password,
         database=DB.name, charset="utf8mb4", autocommit=True, connect_timeout=6,
     )
 
 
-def _apply_session_guard(cur: pymysql.cursors.Cursor) -> None:
-    """护栏①：会话级只读 护栏②：执行超时"""
+def _apply_session_guard(cur) -> None:
+    """护栏①：会话级只读 护栏②：执行超时（SQLite 的只读在 connect() 里用 query_only 设好）"""
+    if IS_SQLITE:
+        return
     cur.execute("SET SESSION TRANSACTION READ ONLY")
     cur.execute("SET SESSION max_execution_time = %s", (GUARD.timeout_ms,))
 
@@ -85,8 +119,14 @@ def _mysql_error(exc: pymysql.err.MySQLError) -> SqlError:
     return SqlError("SQL 被拒绝/执行失败 [MySQL %s]%s: %s" % (code, hint, msg))
 
 
-def explain_rows(cur: pymysql.cursors.Cursor, sql: str) -> int:
-    """护栏③：EXPLAIN 预估扫描行数（各步骤 rows 相乘的保守估计）"""
+def explain_rows(cur, sql: str) -> int:
+    """护栏③：EXPLAIN 预估扫描行数（各步骤 rows 相乘的保守估计）
+
+    SQLite 不提供行数估算（EXPLAIN QUERY PLAN 不含 rows），演示快照下跳过该层，
+    依赖 LIMIT + 超时兜底；真实评估仍在 MySQL 上启用。
+    """
+    if IS_SQLITE:
+        return 0
     cur.execute("EXPLAIN " + sql)
     cols = [d[0] for d in cur.description]
     idx = cols.index("rows") if "rows" in cols else None
@@ -172,8 +212,8 @@ def execute_readonly(
     result = QueryResult(sql=sql)
     columns: list[str] = []
     raw: list[tuple] = []
-    with connect() as conn:
-        with conn.cursor() as cur:
+    with closing(connect()) as conn:
+        with _CursorCtx(conn) as cur:
             try:
                 _apply_session_guard(cur)
                 if check_cost:
@@ -189,6 +229,16 @@ def execute_readonly(
                 raw = list(cur.fetchmany(limit + 1))
             except pymysql.err.MySQLError as exc:
                 raise _mysql_error(exc) from exc
+            except Exception as exc:  # noqa: BLE001  sqlite3.Error 等
+                if type(exc).__module__.startswith("sqlite3"):
+                    msg = str(exc)
+                    hint = ""
+                    if "readonly" in msg.lower() or "query_only" in msg.lower():
+                        hint = MYSQL_HINTS["sqlite_readonly"]
+                    elif "no such table" in msg:
+                        hint = "（表不存在）"
+                    raise SqlError("SQL 被拒绝/执行失败 [SQLite]%s: %s" % (hint, msg[:160])) from exc
+                raise
     if len(raw) > limit:
         result.truncated = True
         raw = raw[:limit]
@@ -209,8 +259,16 @@ def execute_readonly(
 
 def health() -> dict[str, Any]:
     """连通性 + 账号身份自检（M0 验收用）"""
-    with connect() as conn:
-        with conn.cursor() as cur:
+    if IS_SQLITE:
+        import sqlite3
+
+        with connect() as conn:
+            ro = conn.execute("PRAGMA query_only").fetchone()[0]
+            ver = sqlite3.sqlite_version
+        return {"user": "sqlite_query_only", "version": ver, "read_only": int(ro),
+                "max_execution_time_ms": GUARD.timeout_ms, "target": DB.label}
+    with closing(connect()) as conn:
+        with _CursorCtx(conn) as cur:
             _apply_session_guard(cur)
             cur.execute("SELECT CURRENT_USER(), VERSION(), "
                         "@@session.transaction_read_only, @@session.max_execution_time")

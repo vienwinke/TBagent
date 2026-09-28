@@ -9,8 +9,21 @@
 """
 from __future__ import annotations
 
+from config import SQL_DIALECT
+
+DIALECT_RULES = {
+    "mysql": "数据库方言：MySQL 8。日期函数用 CURDATE() / DATE_SUB() / DATE_FORMAT() / HOUR()；表名不要加引号。",
+    "sqlite": """数据库方言：SQLite（公开演示快照）。
+- 当前时间：`date('now')`；"今天"：`date(create_time) = date('now')`
+- 最近 N 天：`create_time >= datetime('now', '-7 day')`
+- 按月：`strftime('%Y-%m', register_time)`；按小时：`CAST(strftime('%H', create_time) AS INTEGER)`
+- **不支持** CURDATE()/DATE_SUB()/DATE_FORMAT()/HOUR()，请用上面的写法
+- 表名/列名不要用反引号""",
+}
+
 # 业务规则：从 schema.json / AGENTS.md 提炼，避免模型瞎猜枚举值
 DOMAIN_RULES = """【业务规则（必须遵守）】
+{DIALECT}
 数据库：MySQL 8，库名 treatbord（任务接取平台），14 张业务表。
 1. 逻辑删除：`user/task/task_claim/task_submission/file/notification/review/report/settlement` 有 `deleted` 字段，
    查询务必加 `deleted = 0`。日志类表（`audit_log`/`login_log`/`task_status_log`/`claim_status_log`/`app_config`）**没有** `deleted`。
@@ -55,10 +68,11 @@ NL2SQL_SYSTEM = """你是一位严谨的 MySQL 数据分析工程师。
 def nl2sql_messages(schema_text: str, question: str, *, error: str | None = None,
                     prev_sql: str | None = None) -> list[dict[str, str]]:
     """构造 NL2SQL 的对话消息；error/prev_sql 用于回环修复"""
+    rules = DOMAIN_RULES.replace("{DIALECT}", DIALECT_RULES.get(SQL_DIALECT, DIALECT_RULES["mysql"]))
     user = f"""【可用表结构（已按相关度检索）】
 {schema_text}
 
-{DOMAIN_RULES}
+{rules}
 
 【用户问题】
 {question}"""

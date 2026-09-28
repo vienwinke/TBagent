@@ -1,7 +1,7 @@
 {
   "database": "treatbord",
   "connection": "app_user@127.0.0.1:33306",
-  "generated_at": "2026-09-28T18:59:14",
+  "generated_at": "2026-09-28T21:31:29",
   "table_count": 15,
   "column_count": 141,
   "tables": [
@@ -1694,5 +1694,7 @@
         }
       ]
     }
-  ]
+  ],
+  "backend": "sqlite",
+  "snapshot": "snapshot.sqlite"
 }

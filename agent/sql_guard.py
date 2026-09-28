@@ -20,9 +20,9 @@ import sqlglot
 from sqlglot import exp
 from sqlglot.errors import ParseError
 
-from config import GUARD, SCHEMA_PATH, SYSTEM_TABLES
+from config import GUARD, SCHEMA_PATH, SQL_DIALECT, SYSTEM_TABLES
 
-DIALECT = "mysql"
+DIALECT = SQL_DIALECT if SQL_DIALECT in ("mysql", "sqlite") else "mysql"
 
 # 危险函数（在 AST 上按函数名匹配，大小写不敏感）
 FORBIDDEN_FUNCS = {

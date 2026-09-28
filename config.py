@@ -15,6 +15,23 @@ ROOT = Path(__file__).resolve().parent
 load_dotenv(ROOT / ".env")
 
 
+def _load_streamlit_secrets() -> None:
+    """Streamlit Cloud / HF Spaces 上密钥放在平台 Secrets（st.secrets），本地用 .env。
+
+    统一注入 os.environ，让下游代码只认环境变量；用 setdefault 保证本地 .env 优先。
+    """
+    try:
+        import streamlit as st  # noqa: PLC0415
+
+        for key, value in dict(st.secrets).items():
+            os.environ.setdefault(str(key), str(value))
+    except Exception:  # noqa: BLE001  不在 Streamlit 运行时 / 无 secrets 时静默跳过
+        pass
+
+
+_load_streamlit_secrets()
+
+
 def _env(key: str, default: str = "") -> str:
     return os.getenv(key, default).strip()
 
@@ -52,6 +69,8 @@ class DBConfig:
 
     @property
     def url(self) -> str:
+        if IS_SQLITE:
+            return "sqlite:///%s" % SQLITE_PATH
         """SQLAlchemy URL（密码做 URL 编码，避免 @ : / 等字符破坏结构）"""
         from urllib.parse import quote_plus
 
@@ -60,7 +79,14 @@ class DBConfig:
         )
 
     @property
+    def sqlite_path(self) -> str:
+        """sqlite URL 形如 sqlite:///abs/path.sqlite → 取出绝对路径"""
+        return self.url.split("///", 1)[-1]
+
+    @property
     def label(self) -> str:
+        if IS_SQLITE:
+            return "sqlite:%s" % self.sqlite_path
         return "%s@%s:%d/%s" % (self.user, self.host, self.port, self.name)
 
 
@@ -80,6 +106,12 @@ SENSITIVE_COLUMNS = frozenset({"openid", "unionid", "password_hash", "ip"})
 
 # 系统表（不参与 Schema 检索与白名单）
 SYSTEM_TABLES = frozenset({"flyway_schema_history"})
+
+# 后端：mysql（真实库，用于完整评估）或 sqlite（公开演示快照，随仓库分发）
+DB_BACKEND = _env("DB_BACKEND", "mysql").lower()
+IS_SQLITE = DB_BACKEND == "sqlite"
+SQL_DIALECT = "sqlite" if IS_SQLITE else "mysql"
+SQLITE_PATH = _env("SQLITE_PATH", str(ROOT / "data" / "snapshot.sqlite"))
 
 LLM = LLMConfig()
 DB = DBConfig()
