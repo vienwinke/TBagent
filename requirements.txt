@@ -1,0 +1,19 @@
+﻿# 核心
+openai>=1.30.0
+python-dotenv>=1.0.0
+SQLAlchemy>=2.0.0
+PyMySQL>=1.1.0
+# SQL 安全校验（三层护栏第 1 层）
+sqlglot>=25.0.0
+# 检索与向量（本地免费）
+sentence-transformers>=3.0.0
+faiss-cpu>=1.8.0
+rank-bm25>=0.2.2
+numpy>=1.26.0
+# 界面与图表
+streamlit>=1.36.0
+pandas>=2.2.0
+matplotlib>=3.8.0
+# 工程
+loguru>=0.7.0
+pytest>=8.0.0
