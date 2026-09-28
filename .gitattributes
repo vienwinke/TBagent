@@ -1,0 +1,6 @@
+﻿# 统一行尾（跨 Windows/WSL 协作，避免 CRLF 噪音）
+* text=auto eol=lf
+*.png binary
+*.jpg binary
+*.index binary
+*.npy binary

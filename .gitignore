@@ -20,3 +20,5 @@ logs/
 *.log
 eval/out/
 __report_tmp__/
+data/schema_index.json
+

@@ -1,0 +1,1698 @@
+{
+  "database": "treatbord",
+  "connection": "app_user@127.0.0.1:33306",
+  "generated_at": "2026-09-28T18:59:14",
+  "table_count": 15,
+  "column_count": 141,
+  "tables": [
+    {
+      "name": "app_config",
+      "desc": "系统配置：限流阈值、审核窗口、缓存 TTL、文件上限等可运行期调整的键值",
+      "rows": 22,
+      "columns": [
+        {
+          "name": "id",
+          "type": "bigint",
+          "nullable": false,
+          "key": "PRI",
+          "default": null,
+          "desc": "主键",
+          "sensitive": false
+        },
+        {
+          "name": "config_key",
+          "type": "varchar(50)",
+          "nullable": false,
+          "key": "UNI",
+          "default": null,
+          "desc": "配置键",
+          "sensitive": false
+        },
+        {
+          "name": "config_value",
+          "type": "varchar(500)",
+          "nullable": true,
+          "key": "",
+          "default": null,
+          "desc": "配置值",
+          "sensitive": false
+        },
+        {
+          "name": "create_time",
+          "type": "datetime",
+          "nullable": false,
+          "key": "",
+          "default": "CURRENT_TIMESTAMP",
+          "desc": "创建时间",
+          "sensitive": false
+        },
+        {
+          "name": "update_time",
+          "type": "datetime",
+          "nullable": false,
+          "key": "",
+          "default": "CURRENT_TIMESTAMP",
+          "desc": "更新时间",
+          "sensitive": false
+        }
+      ],
+      "indexes": [
+        {
+          "name": "PRIMARY",
+          "columns": [
+            "id"
+          ],
+          "unique": true
+        },
+        {
+          "name": "uk_config_key",
+          "columns": [
+            "config_key"
+          ],
+          "unique": true
+        }
+      ]
+    },
+    {
+      "name": "audit_log",
+      "desc": "审计日志：登录/接取/审核/结算/封禁/下架等关键操作",
+      "rows": 121,
+      "columns": [
+        {
+          "name": "id",
+          "type": "bigint",
+          "nullable": false,
+          "key": "PRI",
+          "default": null,
+          "desc": "主键",
+          "sensitive": false
+        },
+        {
+          "name": "user_id",
+          "type": "bigint",
+          "nullable": true,
+          "key": "MUL",
+          "default": null,
+          "desc": "用户 id",
+          "sensitive": false
+        },
+        {
+          "name": "action",
+          "type": "varchar(50)",
+          "nullable": false,
+          "key": "MUL",
+          "default": null,
+          "desc": "操作类型标识",
+          "sensitive": false
+        },
+        {
+          "name": "target_type",
+          "type": "varchar(30)",
+          "nullable": true,
+          "key": "",
+          "default": null,
+          "desc": "目标类型",
+          "sensitive": false
+        },
+        {
+          "name": "target_id",
+          "type": "bigint",
+          "nullable": true,
+          "key": "",
+          "default": null,
+          "desc": "目标 id",
+          "sensitive": false
+        },
+        {
+          "name": "detail",
+          "type": "varchar(500)",
+          "nullable": true,
+          "key": "",
+          "default": null,
+          "desc": "明细描述",
+          "sensitive": false
+        },
+        {
+          "name": "ip",
+          "type": "varchar(45)",
+          "nullable": true,
+          "key": "",
+          "default": null,
+          "desc": "来源 IP（敏感，仅管理员可见）",
+          "sensitive": true
+        },
+        {
+          "name": "create_time",
+          "type": "datetime",
+          "nullable": false,
+          "key": "",
+          "default": "CURRENT_TIMESTAMP",
+          "desc": "创建时间",
+          "sensitive": false
+        }
+      ],
+      "indexes": [
+        {
+          "name": "idx_audit_action_ctime",
+          "columns": [
+            "action",
+            "create_time"
+          ],
+          "unique": false
+        },
+        {
+          "name": "idx_audit_user",
+          "columns": [
+            "user_id"
+          ],
+          "unique": false
+        },
+        {
+          "name": "PRIMARY",
+          "columns": [
+            "id"
+          ],
+          "unique": true
+        }
+      ]
+    },
+    {
+      "name": "claim_status_log",
+      "desc": "接取状态变更留痕：from->to/操作人/原因",
+      "rows": 19,
+      "columns": [
+        {
+          "name": "id",
+          "type": "bigint",
+          "nullable": false,
+          "key": "PRI",
+          "default": null,
+          "desc": "主键",
+          "sensitive": false
+        },
+        {
+          "name": "claim_id",
+          "type": "bigint",
+          "nullable": false,
+          "key": "MUL",
+          "default": null,
+          "desc": "接取记录 id",
+          "sensitive": false
+        },
+        {
+          "name": "from_status",
+          "type": "varchar(20)",
+          "nullable": true,
+          "key": "",
+          "default": null,
+          "desc": "变更前状态",
+          "sensitive": false
+        },
+        {
+          "name": "to_status",
+          "type": "varchar(20)",
+          "nullable": false,
+          "key": "",
+          "default": null,
+          "desc": "变更后状态",
+          "sensitive": false
+        },
+        {
+          "name": "operator_id",
+          "type": "bigint",
+          "nullable": true,
+          "key": "",
+          "default": null,
+          "desc": "操作人 user id",
+          "sensitive": false
+        },
+        {
+          "name": "reason",
+          "type": "varchar(500)",
+          "nullable": true,
+          "key": "",
+          "default": null,
+          "desc": "原因/理由",
+          "sensitive": false
+        },
+        {
+          "name": "create_time",
+          "type": "datetime",
+          "nullable": false,
+          "key": "",
+          "default": "CURRENT_TIMESTAMP",
+          "desc": "创建时间",
+          "sensitive": false
+        }
+      ],
+      "indexes": [
+        {
+          "name": "idx_claimlog_claim",
+          "columns": [
+            "claim_id"
+          ],
+          "unique": false
+        },
+        {
+          "name": "PRIMARY",
+          "columns": [
+            "id"
+          ],
+          "unique": true
+        }
+      ]
+    },
+    {
+      "name": "file",
+      "desc": "文件元数据：凭证图/头像，storage_key 唯一、随机文件名，含大小与 MIME",
+      "rows": 4,
+      "columns": [
+        {
+          "name": "id",
+          "type": "bigint",
+          "nullable": false,
+          "key": "PRI",
+          "default": null,
+          "desc": "主键",
+          "sensitive": false
+        },
+        {
+          "name": "storage_key",
+          "type": "varchar(255)",
+          "nullable": false,
+          "key": "UNI",
+          "default": null,
+          "desc": "biz/{type}/{yyyyMM}/{uuid}.ext",
+          "sensitive": false
+        },
+        {
+          "name": "url",
+          "type": "varchar(255)",
+          "nullable": false,
+          "key": "",
+          "default": null,
+          "desc": "访问地址",
+          "sensitive": false
+        },
+        {
+          "name": "size",
+          "type": "bigint",
+          "nullable": false,
+          "key": "",
+          "default": null,
+          "desc": "文件大小（字节）",
+          "sensitive": false
+        },
+        {
+          "name": "mime",
+          "type": "varchar(100)",
+          "nullable": true,
+          "key": "",
+          "default": null,
+          "desc": "MIME 类型",
+          "sensitive": false
+        },
+        {
+          "name": "uploader_id",
+          "type": "bigint",
+          "nullable": false,
+          "key": "",
+          "default": null,
+          "desc": "上传者 user id",
+          "sensitive": false
+        },
+        {
+          "name": "sec_status",
+          "type": "tinyint(1)",
+          "nullable": false,
+          "key": "",
+          "default": "0",
+          "desc": "内容安全状态 0=待检测 1=通过 2=违规",
+          "sensitive": false
+        },
+        {
+          "name": "create_time",
+          "type": "datetime",
+          "nullable": false,
+          "key": "",
+          "default": "CURRENT_TIMESTAMP",
+          "desc": "创建时间",
+          "sensitive": false
+        },
+        {
+          "name": "update_time",
+          "type": "datetime",
+          "nullable": false,
+          "key": "",
+          "default": "CURRENT_TIMESTAMP",
+          "desc": "更新时间",
+          "sensitive": false
+        },
+        {
+          "name": "deleted",
+          "type": "tinyint(1)",
+          "nullable": false,
+          "key": "",
+          "default": "0",
+          "desc": "逻辑删除（0=未删 1=已删）",
+          "sensitive": false
+        }
+      ],
+      "indexes": [
+        {
+          "name": "PRIMARY",
+          "columns": [
+            "id"
+          ],
+          "unique": true
+        },
+        {
+          "name": "uk_file_key",
+          "columns": [
+            "storage_key"
+          ],
+          "unique": true
+        }
+      ]
+    },
+    {
+      "name": "flyway_schema_history",
+      "desc": "（系统表）Flyway 数据库迁移历史，非业务数据",
+      "rows": 8,
+      "columns": [
+        {
+          "name": "installed_rank",
+          "type": "int",
+          "nullable": false,
+          "key": "PRI",
+          "default": null,
+          "desc": "（系统列）Flyway 安装序号",
+          "sensitive": false
+        },
+        {
+          "name": "version",
+          "type": "varchar(50)",
+          "nullable": true,
+          "key": "",
+          "default": null,
+          "desc": "乐观锁版本号",
+          "sensitive": false
+        },
+        {
+          "name": "description",
+          "type": "varchar(200)",
+          "nullable": false,
+          "key": "",
+          "default": null,
+          "desc": "任务描述（<=2000 字）",
+          "sensitive": false
+        },
+        {
+          "name": "type",
+          "type": "varchar(20)",
+          "nullable": false,
+          "key": "",
+          "default": null,
+          "desc": "类型标识",
+          "sensitive": false
+        },
+        {
+          "name": "script",
+          "type": "varchar(1000)",
+          "nullable": false,
+          "key": "",
+          "default": null,
+          "desc": "",
+          "sensitive": false
+        },
+        {
+          "name": "checksum",
+          "type": "int",
+          "nullable": true,
+          "key": "",
+          "default": null,
+          "desc": "（系统列）迁移校验和",
+          "sensitive": false
+        },
+        {
+          "name": "installed_by",
+          "type": "varchar(100)",
+          "nullable": false,
+          "key": "",
+          "default": null,
+          "desc": "",
+          "sensitive": false
+        },
+        {
+          "name": "installed_on",
+          "type": "timestamp",
+          "nullable": false,
+          "key": "",
+          "default": "CURRENT_TIMESTAMP",
+          "desc": "",
+          "sensitive": false
+        },
+        {
+          "name": "execution_time",
+          "type": "int",
+          "nullable": false,
+          "key": "",
+          "default": null,
+          "desc": "",
+          "sensitive": false
+        },
+        {
+          "name": "success",
+          "type": "tinyint(1)",
+          "nullable": false,
+          "key": "MUL",
+          "default": null,
+          "desc": "（系统列）是否成功",
+          "sensitive": false
+        }
+      ],
+      "indexes": [
+        {
+          "name": "flyway_schema_history_s_idx",
+          "columns": [
+            "success"
+          ],
+          "unique": false
+        },
+        {
+          "name": "PRIMARY",
+          "columns": [
+            "installed_rank"
+          ],
+          "unique": true
+        }
+      ]
+    },
+    {
+      "name": "login_log",
+      "desc": "登录记录：成功与否、失败原因、来源 IP（风控与审计基础）",
+      "rows": 92,
+      "columns": [
+        {
+          "name": "id",
+          "type": "bigint",
+          "nullable": false,
+          "key": "PRI",
+          "default": null,
+          "desc": "主键",
+          "sensitive": false
+        },
+        {
+          "name": "user_id",
+          "type": "bigint",
+          "nullable": true,
+          "key": "MUL",
+          "default": null,
+          "desc": "用户 id",
+          "sensitive": false
+        },
+        {
+          "name": "ip",
+          "type": "varchar(45)",
+          "nullable": true,
+          "key": "",
+          "default": null,
+          "desc": "来源 IP（敏感，仅管理员可见）",
+          "sensitive": true
+        },
+        {
+          "name": "user_agent",
+          "type": "varchar(255)",
+          "nullable": true,
+          "key": "",
+          "default": null,
+          "desc": "",
+          "sensitive": false
+        },
+        {
+          "name": "success",
+          "type": "tinyint(1)",
+          "nullable": false,
+          "key": "",
+          "default": "0",
+          "desc": "（系统列）是否成功",
+          "sensitive": false
+        },
+        {
+          "name": "fail_reason",
+          "type": "varchar(100)",
+          "nullable": true,
+          "key": "",
+          "default": null,
+          "desc": "",
+          "sensitive": false
+        },
+        {
+          "name": "create_time",
+          "type": "datetime",
+          "nullable": false,
+          "key": "MUL",
+          "default": "CURRENT_TIMESTAMP",
+          "desc": "创建时间",
+          "sensitive": false
+        }
+      ],
+      "indexes": [
+        {
+          "name": "idx_login_ctime",
+          "columns": [
+            "create_time"
+          ],
+          "unique": false
+        },
+        {
+          "name": "idx_login_user",
+          "columns": [
+            "user_id"
+          ],
+          "unique": false
+        },
+        {
+          "name": "PRIMARY",
+          "columns": [
+            "id"
+          ],
+          "unique": true
+        }
+      ]
+    },
+    {
+      "name": "notification",
+      "desc": "站内通知：类型/标题/内容/关联业务 id/是否已读",
+      "rows": 11,
+      "columns": [
+        {
+          "name": "id",
+          "type": "bigint",
+          "nullable": false,
+          "key": "PRI",
+          "default": null,
+          "desc": "主键",
+          "sensitive": false
+        },
+        {
+          "name": "user_id",
+          "type": "bigint",
+          "nullable": false,
+          "key": "MUL",
+          "default": null,
+          "desc": "用户 id",
+          "sensitive": false
+        },
+        {
+          "name": "type",
+          "type": "varchar(30)",
+          "nullable": false,
+          "key": "",
+          "default": null,
+          "desc": "类型标识",
+          "sensitive": false
+        },
+        {
+          "name": "title",
+          "type": "varchar(100)",
+          "nullable": true,
+          "key": "",
+          "default": null,
+          "desc": "任务标题（<=50 字）",
+          "sensitive": false
+        },
+        {
+          "name": "content",
+          "type": "varchar(500)",
+          "nullable": true,
+          "key": "",
+          "default": null,
+          "desc": "文本内容",
+          "sensitive": false
+        },
+        {
+          "name": "biz_id",
+          "type": "bigint",
+          "nullable": true,
+          "key": "",
+          "default": null,
+          "desc": "关联业务 id",
+          "sensitive": false
+        },
+        {
+          "name": "is_read",
+          "type": "tinyint(1)",
+          "nullable": false,
+          "key": "",
+          "default": "0",
+          "desc": "是否已读（0/1）",
+          "sensitive": false
+        },
+        {
+          "name": "create_time",
+          "type": "datetime",
+          "nullable": false,
+          "key": "",
+          "default": "CURRENT_TIMESTAMP",
+          "desc": "创建时间",
+          "sensitive": false
+        },
+        {
+          "name": "update_time",
+          "type": "datetime",
+          "nullable": false,
+          "key": "",
+          "default": "CURRENT_TIMESTAMP",
+          "desc": "更新时间",
+          "sensitive": false
+        },
+        {
+          "name": "deleted",
+          "type": "tinyint(1)",
+          "nullable": false,
+          "key": "",
+          "default": "0",
+          "desc": "逻辑删除（0=未删 1=已删）",
+          "sensitive": false
+        }
+      ],
+      "indexes": [
+        {
+          "name": "idx_noti_user_read_ctime",
+          "columns": [
+            "user_id",
+            "is_read",
+            "create_time"
+          ],
+          "unique": false
+        },
+        {
+          "name": "PRIMARY",
+          "columns": [
+            "id"
+          ],
+          "unique": true
+        }
+      ]
+    },
+    {
+      "name": "report",
+      "desc": "举报工单：举报人/目标/原因/处理状态与处理人",
+      "rows": 3,
+      "columns": [
+        {
+          "name": "id",
+          "type": "bigint",
+          "nullable": false,
+          "key": "PRI",
+          "default": null,
+          "desc": "主键",
+          "sensitive": false
+        },
+        {
+          "name": "reporter_id",
+          "type": "bigint",
+          "nullable": false,
+          "key": "",
+          "default": null,
+          "desc": "举报人 user id",
+          "sensitive": false
+        },
+        {
+          "name": "target_type",
+          "type": "varchar(30)",
+          "nullable": false,
+          "key": "",
+          "default": null,
+          "desc": "task/claim/review/user",
+          "sensitive": false
+        },
+        {
+          "name": "target_id",
+          "type": "bigint",
+          "nullable": false,
+          "key": "",
+          "default": null,
+          "desc": "目标 id",
+          "sensitive": false
+        },
+        {
+          "name": "reason",
+          "type": "varchar(500)",
+          "nullable": true,
+          "key": "",
+          "default": null,
+          "desc": "原因/理由",
+          "sensitive": false
+        },
+        {
+          "name": "status",
+          "type": "tinyint(1)",
+          "nullable": false,
+          "key": "MUL",
+          "default": "0",
+          "desc": "0=待处理 1=已处理 2=驳回",
+          "sensitive": false
+        },
+        {
+          "name": "handler_id",
+          "type": "bigint",
+          "nullable": true,
+          "key": "",
+          "default": null,
+          "desc": "处理人（管理员）user id",
+          "sensitive": false
+        },
+        {
+          "name": "create_time",
+          "type": "datetime",
+          "nullable": false,
+          "key": "",
+          "default": "CURRENT_TIMESTAMP",
+          "desc": "创建时间",
+          "sensitive": false
+        },
+        {
+          "name": "update_time",
+          "type": "datetime",
+          "nullable": false,
+          "key": "",
+          "default": "CURRENT_TIMESTAMP",
+          "desc": "更新时间",
+          "sensitive": false
+        },
+        {
+          "name": "deleted",
+          "type": "tinyint(1)",
+          "nullable": false,
+          "key": "",
+          "default": "0",
+          "desc": "逻辑删除（0=未删 1=已删）",
+          "sensitive": false
+        }
+      ],
+      "indexes": [
+        {
+          "name": "idx_report_status",
+          "columns": [
+            "status"
+          ],
+          "unique": false
+        },
+        {
+          "name": "PRIMARY",
+          "columns": [
+            "id"
+          ],
+          "unique": true
+        }
+      ]
+    },
+    {
+      "name": "review",
+      "desc": "互评记录：接取双方 1-5 分评价（claim+from+to 唯一防重复）",
+      "rows": 1,
+      "columns": [
+        {
+          "name": "id",
+          "type": "bigint",
+          "nullable": false,
+          "key": "PRI",
+          "default": null,
+          "desc": "主键",
+          "sensitive": false
+        },
+        {
+          "name": "claim_id",
+          "type": "bigint",
+          "nullable": false,
+          "key": "MUL",
+          "default": null,
+          "desc": "接取记录 id",
+          "sensitive": false
+        },
+        {
+          "name": "from_user_id",
+          "type": "bigint",
+          "nullable": false,
+          "key": "",
+          "default": null,
+          "desc": "评价发起人 user id",
+          "sensitive": false
+        },
+        {
+          "name": "to_user_id",
+          "type": "bigint",
+          "nullable": false,
+          "key": "",
+          "default": null,
+          "desc": "被评价人 user id",
+          "sensitive": false
+        },
+        {
+          "name": "score",
+          "type": "tinyint",
+          "nullable": false,
+          "key": "",
+          "default": null,
+          "desc": "1-5",
+          "sensitive": false
+        },
+        {
+          "name": "content",
+          "type": "varchar(500)",
+          "nullable": true,
+          "key": "",
+          "default": null,
+          "desc": "文本内容",
+          "sensitive": false
+        },
+        {
+          "name": "create_time",
+          "type": "datetime",
+          "nullable": false,
+          "key": "",
+          "default": "CURRENT_TIMESTAMP",
+          "desc": "创建时间",
+          "sensitive": false
+        },
+        {
+          "name": "update_time",
+          "type": "datetime",
+          "nullable": false,
+          "key": "",
+          "default": "CURRENT_TIMESTAMP",
+          "desc": "更新时间",
+          "sensitive": false
+        },
+        {
+          "name": "deleted",
+          "type": "tinyint(1)",
+          "nullable": false,
+          "key": "",
+          "default": "0",
+          "desc": "逻辑删除（0=未删 1=已删）",
+          "sensitive": false
+        }
+      ],
+      "indexes": [
+        {
+          "name": "PRIMARY",
+          "columns": [
+            "id"
+          ],
+          "unique": true
+        },
+        {
+          "name": "uk_review",
+          "columns": [
+            "claim_id",
+            "from_user_id",
+            "to_user_id"
+          ],
+          "unique": true
+        }
+      ]
+    },
+    {
+      "name": "settlement",
+      "desc": "结算记录：金额快照与结算时间（MVP 只跑状态位，不做真实打款）",
+      "rows": 1,
+      "columns": [
+        {
+          "name": "id",
+          "type": "bigint",
+          "nullable": false,
+          "key": "PRI",
+          "default": null,
+          "desc": "主键",
+          "sensitive": false
+        },
+        {
+          "name": "claim_id",
+          "type": "bigint",
+          "nullable": false,
+          "key": "UNI",
+          "default": null,
+          "desc": "接取记录 id",
+          "sensitive": false
+        },
+        {
+          "name": "task_id",
+          "type": "bigint",
+          "nullable": false,
+          "key": "",
+          "default": null,
+          "desc": "任务 id",
+          "sensitive": false
+        },
+        {
+          "name": "user_id",
+          "type": "bigint",
+          "nullable": false,
+          "key": "",
+          "default": null,
+          "desc": "用户 id",
+          "sensitive": false
+        },
+        {
+          "name": "amount",
+          "type": "decimal(10,2)",
+          "nullable": false,
+          "key": "",
+          "default": null,
+          "desc": "金额",
+          "sensitive": false
+        },
+        {
+          "name": "status",
+          "type": "tinyint(1)",
+          "nullable": false,
+          "key": "",
+          "default": "0",
+          "desc": "0=待结算 1=已结算",
+          "sensitive": false
+        },
+        {
+          "name": "settle_time",
+          "type": "datetime",
+          "nullable": true,
+          "key": "",
+          "default": null,
+          "desc": "结算时间",
+          "sensitive": false
+        },
+        {
+          "name": "create_time",
+          "type": "datetime",
+          "nullable": false,
+          "key": "",
+          "default": "CURRENT_TIMESTAMP",
+          "desc": "创建时间",
+          "sensitive": false
+        },
+        {
+          "name": "update_time",
+          "type": "datetime",
+          "nullable": false,
+          "key": "",
+          "default": "CURRENT_TIMESTAMP",
+          "desc": "更新时间",
+          "sensitive": false
+        },
+        {
+          "name": "deleted",
+          "type": "tinyint(1)",
+          "nullable": false,
+          "key": "",
+          "default": "0",
+          "desc": "逻辑删除（0=未删 1=已删）",
+          "sensitive": false
+        }
+      ],
+      "indexes": [
+        {
+          "name": "PRIMARY",
+          "columns": [
+            "id"
+          ],
+          "unique": true
+        },
+        {
+          "name": "uk_settle_claim",
+          "columns": [
+            "claim_id"
+          ],
+          "unique": true
+        }
+      ]
+    },
+    {
+      "name": "task",
+      "desc": "任务主表：发布者发布的任务，含赏金/名额/接取与完成双截止时间/状态/乐观锁",
+      "rows": 8,
+      "columns": [
+        {
+          "name": "id",
+          "type": "bigint",
+          "nullable": false,
+          "key": "PRI",
+          "default": null,
+          "desc": "主键",
+          "sensitive": false
+        },
+        {
+          "name": "publisher_id",
+          "type": "bigint",
+          "nullable": false,
+          "key": "MUL",
+          "default": null,
+          "desc": "发布者 user_id",
+          "sensitive": false
+        },
+        {
+          "name": "title",
+          "type": "varchar(50)",
+          "nullable": false,
+          "key": "",
+          "default": null,
+          "desc": "标题 ≤50",
+          "sensitive": false
+        },
+        {
+          "name": "description",
+          "type": "varchar(2000)",
+          "nullable": true,
+          "key": "",
+          "default": null,
+          "desc": "描述 ≤2000",
+          "sensitive": false
+        },
+        {
+          "name": "reward",
+          "type": "decimal(10,2)",
+          "nullable": false,
+          "key": "",
+          "default": null,
+          "desc": "报酬",
+          "sensitive": false
+        },
+        {
+          "name": "quota",
+          "type": "int",
+          "nullable": false,
+          "key": "",
+          "default": null,
+          "desc": "名额",
+          "sensitive": false
+        },
+        {
+          "name": "claimed_count",
+          "type": "int",
+          "nullable": false,
+          "key": "",
+          "default": "0",
+          "desc": "已接取数",
+          "sensitive": false
+        },
+        {
+          "name": "claim_deadline",
+          "type": "datetime",
+          "nullable": false,
+          "key": "",
+          "default": null,
+          "desc": "接取截止",
+          "sensitive": false
+        },
+        {
+          "name": "deadline",
+          "type": "datetime",
+          "nullable": false,
+          "key": "",
+          "default": null,
+          "desc": "完成截止",
+          "sensitive": false
+        },
+        {
+          "name": "status",
+          "type": "varchar(20)",
+          "nullable": false,
+          "key": "MUL",
+          "default": "OPEN",
+          "desc": "OPEN/IN_PROGRESS/REVIEWING/SETTLED/EXPIRED/CANCELLED",
+          "sensitive": false
+        },
+        {
+          "name": "version",
+          "type": "int",
+          "nullable": false,
+          "key": "",
+          "default": "0",
+          "desc": "乐观锁",
+          "sensitive": false
+        },
+        {
+          "name": "create_time",
+          "type": "datetime",
+          "nullable": false,
+          "key": "",
+          "default": "CURRENT_TIMESTAMP",
+          "desc": "创建时间",
+          "sensitive": false
+        },
+        {
+          "name": "update_time",
+          "type": "datetime",
+          "nullable": false,
+          "key": "",
+          "default": "CURRENT_TIMESTAMP",
+          "desc": "更新时间",
+          "sensitive": false
+        },
+        {
+          "name": "deleted",
+          "type": "tinyint(1)",
+          "nullable": false,
+          "key": "",
+          "default": "0",
+          "desc": "逻辑删除（0=未删 1=已删）",
+          "sensitive": false
+        }
+      ],
+      "indexes": [
+        {
+          "name": "idx_task_publisher",
+          "columns": [
+            "publisher_id"
+          ],
+          "unique": false
+        },
+        {
+          "name": "idx_task_status_claimdead",
+          "columns": [
+            "status",
+            "claim_deadline"
+          ],
+          "unique": false
+        },
+        {
+          "name": "idx_task_status_ctime",
+          "columns": [
+            "status",
+            "create_time"
+          ],
+          "unique": false
+        },
+        {
+          "name": "PRIMARY",
+          "columns": [
+            "id"
+          ],
+          "unique": true
+        }
+      ]
+    },
+    {
+      "name": "task_claim",
+      "desc": "接取记录：谁接了哪个任务，含结算快照 reward 与提交/审核时限（task+user 唯一防重复接取）",
+      "rows": 7,
+      "columns": [
+        {
+          "name": "id",
+          "type": "bigint",
+          "nullable": false,
+          "key": "PRI",
+          "default": null,
+          "desc": "主键",
+          "sensitive": false
+        },
+        {
+          "name": "task_id",
+          "type": "bigint",
+          "nullable": false,
+          "key": "MUL",
+          "default": null,
+          "desc": "任务 id",
+          "sensitive": false
+        },
+        {
+          "name": "user_id",
+          "type": "bigint",
+          "nullable": false,
+          "key": "MUL",
+          "default": null,
+          "desc": "接取者",
+          "sensitive": false
+        },
+        {
+          "name": "status",
+          "type": "varchar(20)",
+          "nullable": false,
+          "key": "MUL",
+          "default": "CLAIMED",
+          "desc": "CLAIMED/SUBMITTED/APPROVED/REJECTED/CANCELLED",
+          "sensitive": false
+        },
+        {
+          "name": "reward",
+          "type": "decimal(10,2)",
+          "nullable": false,
+          "key": "",
+          "default": null,
+          "desc": "结算快照",
+          "sensitive": false
+        },
+        {
+          "name": "submitted_at",
+          "type": "datetime",
+          "nullable": true,
+          "key": "",
+          "default": null,
+          "desc": "凭证提交时间",
+          "sensitive": false
+        },
+        {
+          "name": "reviewed_at",
+          "type": "datetime",
+          "nullable": true,
+          "key": "",
+          "default": null,
+          "desc": "审核完成时间",
+          "sensitive": false
+        },
+        {
+          "name": "review_deadline",
+          "type": "datetime",
+          "nullable": true,
+          "key": "",
+          "default": null,
+          "desc": "提交后48h审核截止",
+          "sensitive": false
+        },
+        {
+          "name": "review_note",
+          "type": "varchar(500)",
+          "nullable": true,
+          "key": "",
+          "default": null,
+          "desc": "审核备注（驳回原因）",
+          "sensitive": false
+        },
+        {
+          "name": "create_time",
+          "type": "datetime",
+          "nullable": false,
+          "key": "",
+          "default": "CURRENT_TIMESTAMP",
+          "desc": "创建时间",
+          "sensitive": false
+        },
+        {
+          "name": "update_time",
+          "type": "datetime",
+          "nullable": false,
+          "key": "",
+          "default": "CURRENT_TIMESTAMP",
+          "desc": "更新时间",
+          "sensitive": false
+        },
+        {
+          "name": "deleted",
+          "type": "tinyint(1)",
+          "nullable": false,
+          "key": "",
+          "default": "0",
+          "desc": "逻辑删除（0=未删 1=已删）",
+          "sensitive": false
+        }
+      ],
+      "indexes": [
+        {
+          "name": "idx_claim_status_ctime",
+          "columns": [
+            "status",
+            "create_time"
+          ],
+          "unique": false
+        },
+        {
+          "name": "idx_claim_status_revdl",
+          "columns": [
+            "status",
+            "review_deadline"
+          ],
+          "unique": false
+        },
+        {
+          "name": "idx_claim_status_submitted",
+          "columns": [
+            "status",
+            "submitted_at"
+          ],
+          "unique": false
+        },
+        {
+          "name": "idx_claim_user_ctime",
+          "columns": [
+            "user_id",
+            "create_time"
+          ],
+          "unique": false
+        },
+        {
+          "name": "PRIMARY",
+          "columns": [
+            "id"
+          ],
+          "unique": true
+        },
+        {
+          "name": "uk_claim_task_user",
+          "columns": [
+            "task_id",
+            "user_id"
+          ],
+          "unique": true
+        }
+      ]
+    },
+    {
+      "name": "task_status_log",
+      "desc": "任务状态变更留痕：from->to/操作人/原因（排查并发问题的依据）",
+      "rows": 9,
+      "columns": [
+        {
+          "name": "id",
+          "type": "bigint",
+          "nullable": false,
+          "key": "PRI",
+          "default": null,
+          "desc": "主键",
+          "sensitive": false
+        },
+        {
+          "name": "task_id",
+          "type": "bigint",
+          "nullable": false,
+          "key": "MUL",
+          "default": null,
+          "desc": "任务 id",
+          "sensitive": false
+        },
+        {
+          "name": "from_status",
+          "type": "varchar(20)",
+          "nullable": true,
+          "key": "",
+          "default": null,
+          "desc": "变更前状态",
+          "sensitive": false
+        },
+        {
+          "name": "to_status",
+          "type": "varchar(20)",
+          "nullable": false,
+          "key": "",
+          "default": null,
+          "desc": "变更后状态",
+          "sensitive": false
+        },
+        {
+          "name": "operator_id",
+          "type": "bigint",
+          "nullable": true,
+          "key": "",
+          "default": null,
+          "desc": "操作人 user id",
+          "sensitive": false
+        },
+        {
+          "name": "reason",
+          "type": "varchar(500)",
+          "nullable": true,
+          "key": "",
+          "default": null,
+          "desc": "原因/理由",
+          "sensitive": false
+        },
+        {
+          "name": "create_time",
+          "type": "datetime",
+          "nullable": false,
+          "key": "",
+          "default": "CURRENT_TIMESTAMP",
+          "desc": "创建时间",
+          "sensitive": false
+        }
+      ],
+      "indexes": [
+        {
+          "name": "idx_tasklog_task",
+          "columns": [
+            "task_id"
+          ],
+          "unique": false
+        },
+        {
+          "name": "PRIMARY",
+          "columns": [
+            "id"
+          ],
+          "unique": true
+        }
+      ]
+    },
+    {
+      "name": "task_submission",
+      "desc": "凭证提交：交付内容与图片 id 列表（审核前可覆盖，保留最新）",
+      "rows": 6,
+      "columns": [
+        {
+          "name": "id",
+          "type": "bigint",
+          "nullable": false,
+          "key": "PRI",
+          "default": null,
+          "desc": "主键",
+          "sensitive": false
+        },
+        {
+          "name": "claim_id",
+          "type": "bigint",
+          "nullable": false,
+          "key": "MUL",
+          "default": null,
+          "desc": "接取记录 id",
+          "sensitive": false
+        },
+        {
+          "name": "content",
+          "type": "varchar(2000)",
+          "nullable": true,
+          "key": "",
+          "default": null,
+          "desc": "文字凭证 ≤2000",
+          "sensitive": false
+        },
+        {
+          "name": "file_ids",
+          "type": "json",
+          "nullable": true,
+          "key": "",
+          "default": null,
+          "desc": "凭证图片 file.id 数组",
+          "sensitive": false
+        },
+        {
+          "name": "submit_time",
+          "type": "datetime",
+          "nullable": false,
+          "key": "",
+          "default": "CURRENT_TIMESTAMP",
+          "desc": "提交时间",
+          "sensitive": false
+        },
+        {
+          "name": "create_time",
+          "type": "datetime",
+          "nullable": false,
+          "key": "",
+          "default": "CURRENT_TIMESTAMP",
+          "desc": "创建时间",
+          "sensitive": false
+        },
+        {
+          "name": "update_time",
+          "type": "datetime",
+          "nullable": false,
+          "key": "",
+          "default": "CURRENT_TIMESTAMP",
+          "desc": "更新时间",
+          "sensitive": false
+        },
+        {
+          "name": "deleted",
+          "type": "tinyint(1)",
+          "nullable": false,
+          "key": "",
+          "default": "0",
+          "desc": "逻辑删除（0=未删 1=已删）",
+          "sensitive": false
+        }
+      ],
+      "indexes": [
+        {
+          "name": "idx_submission_claim",
+          "columns": [
+            "claim_id"
+          ],
+          "unique": false
+        },
+        {
+          "name": "PRIMARY",
+          "columns": [
+            "id"
+          ],
+          "unique": true
+        }
+      ]
+    },
+    {
+      "name": "user",
+      "desc": "用户表：微信登录用户，含昵称/信用分/角色/状态/账密（openid 唯一）",
+      "rows": 21,
+      "columns": [
+        {
+          "name": "id",
+          "type": "bigint",
+          "nullable": false,
+          "key": "PRI",
+          "default": null,
+          "desc": "主键",
+          "sensitive": false
+        },
+        {
+          "name": "openid",
+          "type": "varchar(64)",
+          "nullable": false,
+          "key": "UNI",
+          "default": null,
+          "desc": "微信 openid；注销时匿名化为 DEL_<uuid>",
+          "sensitive": true
+        },
+        {
+          "name": "username",
+          "type": "varchar(40)",
+          "nullable": true,
+          "key": "UNI",
+          "default": null,
+          "desc": "登录账号（唯一；微信登录自动生成或用户自填）",
+          "sensitive": false
+        },
+        {
+          "name": "unionid",
+          "type": "varchar(64)",
+          "nullable": true,
+          "key": "",
+          "default": null,
+          "desc": "预留",
+          "sensitive": true
+        },
+        {
+          "name": "nickname",
+          "type": "varchar(30)",
+          "nullable": true,
+          "key": "",
+          "default": null,
+          "desc": "昵称，需内容安全检测",
+          "sensitive": false
+        },
+        {
+          "name": "password_hash",
+          "type": "varchar(128)",
+          "nullable": true,
+          "key": "",
+          "default": null,
+          "desc": "密码哈希（SHA-256 + 随机盐 + pepper）",
+          "sensitive": true
+        },
+        {
+          "name": "avatar",
+          "type": "varchar(255)",
+          "nullable": true,
+          "key": "",
+          "default": null,
+          "desc": "头像 URL",
+          "sensitive": false
+        },
+        {
+          "name": "credit_score",
+          "type": "int",
+          "nullable": false,
+          "key": "",
+          "default": "100",
+          "desc": "信用分",
+          "sensitive": false
+        },
+        {
+          "name": "role",
+          "type": "tinyint(1)",
+          "nullable": false,
+          "key": "",
+          "default": "0",
+          "desc": "0=USER 1=ADMIN",
+          "sensitive": false
+        },
+        {
+          "name": "status",
+          "type": "tinyint(1)",
+          "nullable": false,
+          "key": "",
+          "default": "0",
+          "desc": "0=正常 1=封禁",
+          "sensitive": false
+        },
+        {
+          "name": "register_time",
+          "type": "datetime",
+          "nullable": false,
+          "key": "",
+          "default": "CURRENT_TIMESTAMP",
+          "desc": "注册时间",
+          "sensitive": false
+        },
+        {
+          "name": "create_time",
+          "type": "datetime",
+          "nullable": false,
+          "key": "",
+          "default": "CURRENT_TIMESTAMP",
+          "desc": "创建时间",
+          "sensitive": false
+        },
+        {
+          "name": "update_time",
+          "type": "datetime",
+          "nullable": false,
+          "key": "",
+          "default": "CURRENT_TIMESTAMP",
+          "desc": "更新时间",
+          "sensitive": false
+        },
+        {
+          "name": "deleted",
+          "type": "tinyint(1)",
+          "nullable": false,
+          "key": "",
+          "default": "0",
+          "desc": "逻辑删除（0=未删 1=已删）",
+          "sensitive": false
+        }
+      ],
+      "indexes": [
+        {
+          "name": "PRIMARY",
+          "columns": [
+            "id"
+          ],
+          "unique": true
+        },
+        {
+          "name": "uk_user_openid",
+          "columns": [
+            "openid"
+          ],
+          "unique": true
+        },
+        {
+          "name": "uk_user_username",
+          "columns": [
+            "username"
+          ],
+          "unique": true
+        }
+      ]
+    }
+  ]
+}
