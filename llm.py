@@ -95,7 +95,7 @@ def chat(
     *,
     model: str | None = None,
     temperature: float = 0.0,
-    max_tokens: int | None = 1024,
+    max_tokens: int | None = 2048,
     json_mode: bool = False,
     tag: str = "",
 ) -> str:
