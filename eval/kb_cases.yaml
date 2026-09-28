@@ -1,0 +1,49 @@
+﻿meta:
+  version: 1
+  note: 知识库问答评估：answer 类看"是否答对且引用命中"；refuse 类看"资料不足时是否如实拒答"
+  cases: 10
+cases:
+- id: kb-01
+  question: 任务有哪些状态？
+  expect: answer
+  expect_hit: 状态机
+  notes: 应说明 OPEN/IN_PROGRESS/REVIEWING/SETTLED/EXPIRED/CANCELLED
+- id: kb-02
+  question: 信用分的初始值是多少？
+  expect: answer
+  expect_hit: 信用分
+  notes: 应为 100
+- id: kb-03
+  question: 怎么发布一个任务？
+  expect: answer
+  expect_hit: 发布任务
+- id: kb-04
+  question: 接取名额是怎么扣减的？取消会释放吗？
+  expect: answer
+  expect_hit: 名额
+  notes: 应说明取消会释放名额
+- id: kb-05
+  question: 敏感字段查询时会怎么处理？
+  expect: answer
+  expect_hit: 安全
+  notes: 应说明脱敏为 [已脱敏]
+- id: kb-06
+  question: 提交凭证后多久结算？
+  expect: answer
+  expect_hit: 审核
+  notes: 48 小时自动通过 + 生成结算记录
+- id: kb-07
+  question: 公司年假有多少天？
+  expect: refuse
+  notes: 库外问题，必须如实说资料不足
+- id: kb-08
+  question: 今天北京的天气怎么样？
+  expect: refuse
+- id: kb-09
+  question: 你们支持信用卡支付吗？
+  expect: refuse
+- id: kb-10
+  question: 账号注销后数据还能恢复吗？
+  expect: answer
+  expect_hit: 注销
+  notes: 不可恢复

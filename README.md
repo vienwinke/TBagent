@@ -88,7 +88,7 @@ data/         schema.json · faiss.index · chunks.json · cache/
 - [x] M0 骨架：config/llm（重试+token/成本）/executor（只读沙箱+脱敏+EXPLAIN 成本护栏）
 - [x] M1 Schema 抽取与检索（15 表/141 列含中文描述；Schema Top-5 召回 12/12 = 100%）
 - [x] M2 NL2SQL + 三层护栏 + 回环修复（护栏单测 16/16 危险 SQL 全拦截；回环修复 5 类场景通过）
-- [ ] M3 知识库 RAG + 意图路由（M4 已实现规则版路由：`agent/router.py`，M3 升级为 LLM 分类 + 知识分支）
+- [x] M3 知识库 RAG + 三分类路由（**命中率 100% / 拒答率 100% / 引用覆盖 100%**）
 - [x] M4 自动图表 + Streamlit 界面（`agent/chart.py` 选图规则 + `app.py`，含成本面板与护栏提示）
 - [x] M5 60 条评估集 + 跑分 + 消融（**EX 严格 90.2% / 宽松 94.1%**；危险操作执行率 0%；脱敏 100%）
 - [ ] M6 部署 + README 指标表 + 演示视频

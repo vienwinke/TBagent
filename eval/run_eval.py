@@ -268,6 +268,77 @@ def scorecard(result: dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
+KB_CASES = ROOT / "eval" / "kb_cases.yaml"
+
+
+def kb_evaluate(*, limit: int | None = None) -> dict[str, Any]:
+    """知识库问答评估：命中率（答对且引用命中）/ 拒答率（库外如实说明）/ 引用覆盖率"""
+    from agent import rag
+
+    data = yaml.safe_load(KB_CASES.read_text(encoding="utf-8"))
+    cases = data["cases"][:limit] if limit else data["cases"]
+    per_case, latencies, tokens = [], [], []
+    hit = hit_total = refuse_ok = refuse_total = cited = 0
+    for c in cases:
+        t0 = time.time()
+        r = rag.answer(c["question"])
+        dt = time.time() - t0
+        latencies.append(dt * 1000)
+        tokens.append(r.usage.get("total_tokens", 0))
+        blob = " ".join(h["heading"] + h["text"] for h in r.hits)
+        row = {"id": c["id"], "question": c["question"], "expect": c["expect"],
+               "answer": r.answer, "insufficient": r.insufficient, "citations": r.citations,
+               "error": r.error, "latency_ms": int(dt * 1000),
+               "tokens": r.usage.get("total_tokens", 0)}
+        if c["expect"] == "answer":
+            hit_total += 1
+            ok = r.ok and not r.insufficient and (c.get("expect_hit") or "") in blob
+            row["verdict"] = "HIT" if ok else "MISS"
+            hit += ok
+            cited += bool(r.citations)
+        else:
+            refuse_total += 1
+            ok = r.insufficient or any(k in r.answer for k in ("资料中", "没有相关", "无法", "没有找到"))
+            row["verdict"] = "REFUSED" if ok else "HALLUCINATED"
+            refuse_ok += ok
+        per_case.append(row)
+        print("  %-7s %-11s %-7s %s" % (c["id"], row["verdict"], "%dms" % row["latency_ms"],
+                                        (row["answer"] or row["error"] or "")[:56]))
+    result = {"label": "kb", "at": datetime.datetime.now().isoformat(timespec="seconds"),
+              "metrics": {
+                  "hit_rate": round(hit / hit_total, 4) if hit_total else 0.0,
+                  "hit": hit, "hit_total": hit_total,
+                  "refuse_rate": round(refuse_ok / refuse_total, 4) if refuse_total else 0.0,
+                  "refuse_ok": refuse_ok, "refuse_total": refuse_total,
+                  "citation_rate": round(cited / hit_total, 4) if hit_total else 0.0,
+                  "latency_p50_ms": int(percentile(latencies, 50)),
+                  "latency_p95_ms": int(percentile(latencies, 95)),
+                  "avg_tokens": int(sum(tokens) / len(tokens)) if tokens else 0},
+              "cases": per_case}
+    OUT.mkdir(parents=True, exist_ok=True)
+    stamp = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
+    path = OUT / ("eval-kb-%s.json" % stamp)
+    path.write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8")
+    result["output"] = str(path)
+    return result
+
+
+def kb_scorecard(result: dict[str, Any]) -> str:
+    m = result["metrics"]
+    lines = ["# 知识库问答评估（RAG）", "", "| 指标 | 值 |", "|---|---|",
+             "| 命中率（答对且引用命中） | **%.1f%%** (%d/%d) |" % (m["hit_rate"] * 100, m["hit"], m["hit_total"]),
+             "| 拒答率（库外如实说明） | **%.1f%%** (%d/%d) |" % (m["refuse_rate"] * 100, m["refuse_ok"], m["refuse_total"]),
+             "| 引用覆盖率 | %.1f%% |" % (m["citation_rate"] * 100),
+             "| 延迟 P50 / P95 | %dms / %dms |" % (m["latency_p50_ms"], m["latency_p95_ms"]),
+             "| 平均 tokens | %d |" % m["avg_tokens"], ""]
+    bad = [c for c in result["cases"] if c["verdict"] in ("MISS", "HALLUCINATED")]
+    if bad:
+        lines += ["## 未通过（%d）" % len(bad), "", "| id | 判定 | 回答 |", "|---|---|---|"]
+        for c in bad:
+            lines.append("| %s | %s | %s |" % (c["id"], c["verdict"], (c["answer"] or c["error"] or "")[:70]))
+    return "\n".join(lines)
+
+
 def main() -> None:
     setup_logging()
     ap = argparse.ArgumentParser(description="数据问答 Agent 评估")
@@ -275,6 +346,7 @@ def main() -> None:
     ap.add_argument("--score", action="store_true", help="跑分（需 API Key）")
     ap.add_argument("--ablation", action="store_true", help="消融实验（需 API Key）")
     ap.add_argument("--limit", type=int, default=None, help="只跑前 N 题")
+    ap.add_argument("--kb", action="store_true", help="知识库问答评估（RAG）")
     args = ap.parse_args()
 
     if args.verify_references:
@@ -287,6 +359,14 @@ def main() -> None:
             if r["status"] == "FAIL":
                 print("  x %-9s %s" % (r["id"], r["detail"]))
         print("参考结果（行哈希）已写回 eval/cases.yaml")
+        return
+
+    if args.kb:
+        r = kb_evaluate(limit=args.limit)
+        card = kb_scorecard(r)
+        print(card)
+        (OUT / "scorecard-kb.md").write_text(card, encoding="utf-8")
+        print("\nscorecard -> eval/out/scorecard-kb.md")
         return
 
     if args.score or args.ablation:

@@ -18,6 +18,7 @@ import llm as llm_mod
 from agent import answer as answer_mod
 from agent import chart as chart_mod
 from agent import nl2sql
+from agent import rag
 from agent import router
 from config import DB, GUARD, LLM, setup_logging
 
@@ -25,6 +26,9 @@ st.set_page_config(page_title="数据问答 Agent", page_icon="📊", layout="wi
 setup_logging()
 
 EXAMPLES = [
+    "任务有哪些状态？",                 # 知识库（RAG）
+    "信用分的初始值是多少？",            # 知识库（RAG）
+    "公司年假有多少天？",               # 库外 → 应如实拒答
     "待接取的任务有几个？",
     "每个发布者发布了多少个任务？",
     "最近 7 天每天新增的接取数量",
@@ -47,6 +51,16 @@ def sidebar() -> None:
         st.code("%s\nmax_rows=%d / timeout=%dms / EXPLAIN≤%d 行\nSchema Top-K=%d"
                 % (DB.label, GUARD.max_rows, GUARD.timeout_ms, GUARD.explain_row_limit,
                    GUARD.schema_top_k), language="text")
+        st.caption("知识库（RAG）")
+        try:
+            from agent.kb import stats as kb_stats
+
+            ks = kb_stats()
+            st.code("%d 个片段 · %d 个文档\n%s" % (ks["chunks"], len(ks["docs"]),
+                                                 "、".join(d.replace(".md", "") for d in ks["docs"])),
+                    language="text")
+        except Exception:  # noqa: BLE001
+            st.code("未构建（运行 scripts/build_knowledge.py）", language="text")
         st.divider()
         s = llm_mod.USAGE.summary()
         st.caption("本次会话用量")
@@ -102,9 +116,20 @@ def handle(question: str) -> dict:
     item = {"question": question, "intent": intent}
 
     if intent == router.CHAT:
-        item.update(answer_text="我是你的数据问答助手：可以用中文查询 treatbord 数据库。"
-                                "试着问「待接取的任务有几个？」。",
+        item.update(answer_text="我是你的 treatbord 助手：可以**查数据**（如「待接取的任务有几个？」），"
+                                "也可以**查业务规则**（如「任务有哪些状态？」）。",
                     elapsed_ms=int((time.time() - started) * 1000))
+        return item
+
+    if intent == router.KNOWLEDGE:
+        before_kb = llm_mod.USAGE.summary().copy()
+        r = rag.answer(question)
+        after_kb = llm_mod.USAGE.summary()
+        item.update(answer_text=r.answer or ("⚠️ %s" % r.error),
+                    citations=r.citations, hits=r.hits, insufficient=r.insufficient,
+                    elapsed_ms=int((time.time() - started) * 1000),
+                    tokens=after_kb["total_tokens"] - before_kb.get("total_tokens", 0),
+                    cost=after_kb["cost_yuan"] - before_kb.get("cost_yuan", 0.0))
         return item
 
     before = llm_mod.USAGE.summary().copy()
@@ -130,6 +155,19 @@ def render_item(item: dict) -> None:
     with st.chat_message("assistant"):
         st.write(item.get("answer_text", ""))
         if item.get("intent") == router.CHAT:
+            return
+        if item.get("intent") == router.KNOWLEDGE:
+            bits = ["耗时 %dms" % item.get("elapsed_ms", 0), "tokens %d" % item.get("tokens", 0),
+                    "成本 ¥%.5f" % item.get("cost", 0.0)]
+            if item.get("insufficient"):
+                bits.append("资料不足，已如实说明")
+            st.caption(" · ".join(bits))
+            if item.get("citations"):
+                with st.expander("引用来源（%d）" % len(item["citations"])):
+                    for c in item["citations"]:
+                        st.write("· " + c)
+                    for h in (item.get("hits") or [])[:4]:
+                        st.caption("【%s】%s" % (h["heading"], h["text"][:100].replace("\n", " ")))
             return
         q = item.get("query") or {}
         cols = q.get("columns") or []
