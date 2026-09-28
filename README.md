@@ -34,24 +34,20 @@
   └─ 输出：答案 + SQL（可折叠）+ 结果表 + 图 + 引用 + 耗时/成本
 ```
 
-## 快速开始
+## 快速开始（WSL）
 
 ```bash
-# 0) 只读数据库账号（需 root 跑一次；解读 sql/readonly_user.sql 顶部说明）
-mysql -u root -p < sql/readonly_user.sql
-
-# 1) 环境
-python -m venv .venv
-.venv\Scripts\activate            # Windows
+cd ~/Project/agent
+python3 -m venv .venv && . .venv/bin/activate
 pip install -r requirements.txt
 
-# 2) 配置密钥（绝不提交）
-copy .env.example .env            # 然后填 DEEPSEEK_API_KEY / DB_READONLY_URL
-
-# 3) 抽 Schema 描述 → 建检索索引 → 启动
-python -m agent.schema_index --build
-streamlit run app.py
+cp .env.example .env            # 填 DEEPSEEK_API_KEY（DB 连接已在 .env，直连 3306）
+python -m agent.schema_index --build           # 建 Schema 检索索引
+streamlit run app.py                          # M4 完成后可用
 ```
+
+> 环境细节（Python 版本、数据库直连、向量后端切换、自检命令）见 [docs/开发环境.md](docs/开发环境.md)。
+> 可选：若拿到 MySQL root，跑 `sql/readonly_user.sql` 换成最小权限只读账号。
 
 ## 目录
 
