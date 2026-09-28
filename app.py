@@ -112,7 +112,8 @@ def render_chart(spec: chart_mod.ChartSpec, columns: list, rows: list) -> None:
 # ---------------- 单轮问答 ----------------
 def handle(question: str) -> dict:
     started = time.time()
-    intent = router.route(question)
+    # 规则无法判定时交给 LLM 分类（只输出一个词，约 8 token）
+    intent = router.route(question, classify_fn=router.llm_classify)
     item = {"question": question, "intent": intent}
 
     if intent == router.CHAT:

@@ -121,15 +121,20 @@ def test_route_knowledge():
 
 
 def test_route_data():
-    for q in ["待接取的任务有几个？", "最近 7 天每天新增的接取数量", "平均赏金是多少", "统计各状态任务分布"]:
+    for q in ["待接取的任务有几个？", "最近 7 天每天新增的接取数量", "平均赏金是多少",
+              "统计各状态任务分布", "今天的登录失败次数是多少？"]:
         assert router.route(q) == router.DATA, q
+
+
+def test_direct_sql_goes_to_data():
+    assert router.route("SELECT COUNT(*) FROM task") == router.DATA
 
 
 def test_route_falls_back_to_classifier():
     def classify(q):
         return router.DATA
 
-    # 含业务名词但无线索的短句 → 交给分类器
+    # 含业务名词但无线索 → 交给分类器
     assert router.route("任务那块东西", classify_fn=classify) == router.DATA
 
 
@@ -138,3 +143,35 @@ def test_route_classifier_failure_defaults_to_data():
         raise RuntimeError("network")
 
     assert router.route("嗯嗯这个问题有点意思啊随便聊聊", classify_fn=boom) == router.DATA
+
+def test_citations_use_labels_and_drop_invalid():
+    """回归：模型引用错来源时，不得展示不存在的来源（实测曾把业务规则引成常见问题）"""
+    captured = {}
+
+    def fake(messages):
+        # 故意给一个不存在的来源 + 一个真实标签
+        captured["n"] = 1
+        return {"answer": "6 种状态。", "used_sources": ["不存在的文档", "01-业务规则.md › 任务状态机"],
+                "insufficient": False}
+
+    r = rag.answer("任务有哪些状态？", llm_fn=fake)
+    assert r.citations == ["01-业务规则.md › 任务状态机"]
+
+
+def test_citations_fallback_when_all_invalid():
+    def fake(messages):
+        return {"answer": "x", "used_sources": ["完全不对的来源"], "insufficient": False}
+
+    r = rag.answer("任务有哪些状态？", llm_fn=fake)
+    assert r.citations, "全部无效时应回退到 Top-2 来源"
+    assert all(c.endswith((".md", "机", "则", "题", "隐私", "规则", "状态机")) or ".md" in c for c in r.citations)
+
+
+def test_out_of_domain_questions_never_go_to_data():
+    """回归：库外问题（无业务名词）不得进入 SQL 生成分支
+
+    实测踩坑："公司年假有多少天" 因含"多少"被送进数据分支，生成了无关 SQL。
+    """
+    for q in ["公司年假有多少天？", "今天北京的天气怎么样？", "你们支持信用卡支付吗？"]:
+        got = router.route(q)
+        assert got != router.DATA, q

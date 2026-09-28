@@ -22,13 +22,16 @@ CHAT_PATTERNS = [
     r"^(再见|拜拜|bye)",
 ]
 
-# 需要"算数字/查明细"的线索
-DATA_HINTS = [
-    r"(多少|几个|几条|几笔|几号|哪些任务|哪个任务|排名|统计|总数|平均|最大|最小|占比|分布|趋势)",
-    r"(近\s*\d+\s*天|今天|昨天|本周|本月|上周|上月|最近)",
+# 聚合/统计诉求
+AGG_HINTS = [
+    r"(多少|几个|几条|几笔|排名|统计|总数|平均|最大|最小|占比|分布|趋势|明细|列表)",
     r"(查询|列出|看看|给我|展示).{0,6}(数据|明细|列表)",
-    r"\b(select|count|sum|avg|group by)\b",
 ]
+# 时间线索（单独不足以判定为数据问题："今天天气" 不该查库）
+TIME_HINTS = [r"(近\s*\d+\s*天|今天|昨天|本周|本月|上周|上月|最近)"]
+# 直接输入 SQL 的情况
+SQL_HINTS = [r"\b(select|count|sum|avg|group by|from)\b"]
+DATA_HINTS = AGG_HINTS + TIME_HINTS + SQL_HINTS
 
 # 需要"讲规则/流程/定义"的线索（强）
 KNOWLEDGE_STRONG = [
@@ -36,6 +39,7 @@ KNOWLEDGE_STRONG = [
     r"(规则|口径|政策|流程|条件|限制|门槛|机制|原理)",
     r"(怎么|如何|为什么|是什么|什么是|什么意思|能否|可以吗|支持吗|需要什么)",
     r"(多久|什么时候|几天|多长时间).{0,6}(审核|结算|到账|处理)",
+    r"(支持|是否支持|能否|可以吗|需要什么|怎么算|收费|费用|价格|规则是什么)",
 ]
 
 # 业务名词：既能进数据问题也能进知识问题，单靠它不足以判定
@@ -47,7 +51,10 @@ def route(question: str, *, classify_fn: Callable[[str], str] | None = None) -> 
     if not q:
         return CHAT
 
-    has_data = any(re.search(p, q, re.I) for p in DATA_HINTS)
+    has_agg = any(re.search(p, q, re.I) for p in AGG_HINTS)
+    has_time = any(re.search(p, q, re.I) for p in TIME_HINTS)
+    has_sql = any(re.search(p, q, re.I) for p in SQL_HINTS)
+    has_data = has_agg or has_time or has_sql
     has_biz = re.search(BIZ_NOUNS, q) is not None
     has_kb = any(re.search(p, q, re.I) for p in KNOWLEDGE_STRONG)
 
@@ -56,18 +63,18 @@ def route(question: str, *, classify_fn: Callable[[str], str] | None = None) -> 
         if re.search(p, q, re.I) and not has_biz:
             return CHAT
 
-    # 2) 强知识线索且没有聚合诉求 → 知识库
-    if has_kb and not has_data:
-        return KNOWLEDGE
-
-    # 3) 明显的数据诉求 → 数据
-    if has_data:
+    # 2) 直接输入 SQL → 数据
+    if has_sql:
         return DATA
 
-    # 4) 含业务名词但无强线索：
-    #    带聚合词 → 数据；否则交给 LLM 分类（规则无法判定时）；分类器不可用再倾向知识
+    # 3) 强知识线索且没有聚合诉求 → 知识库
+    if has_kb and not has_agg:
+        return KNOWLEDGE
+
+    # 4) 数据分支的硬门槛：**必须出现 treatbord 业务名词**
+    #    （否则"公司年假有多少天"这类库外问题会被误送进 SQL 生成；实测踩到）
     if has_biz:
-        if re.search(r"(哪些|多少|几个|几条)", q):
+        if has_agg or has_time:
             return DATA
         if classify_fn:
             try:
@@ -78,9 +85,26 @@ def route(question: str, *, classify_fn: Callable[[str], str] | None = None) -> 
                 pass
         return KNOWLEDGE
 
-    # 5) 兜底：短句闲聊，长句交给 LLM 分类（失败默认 data，宁可多查一次也别答非所问）
-    if len(q) <= 12:
-        return CHAT
+    # 5) 无业务名词但带聚合/时间词（如"今天天气怎么样"）→ 交给分类器，失败则走知识库（会如实拒答）
+    if has_agg or has_time:
+        if classify_fn:
+            try:
+                got = classify_fn(q)
+                if got in (CHAT, KNOWLEDGE, DATA):
+                    return got
+            except Exception:  # noqa: BLE001
+                pass
+        return KNOWLEDGE
+
+    # 6) 兜底：先问分类器（短句也问，避免"你们支持信用卡支付吗"被当成闲聊）；失败默认 data
+    if classify_fn:
+        try:
+            got = classify_fn(q)
+            if got in (CHAT, KNOWLEDGE, DATA):
+                return got
+        except Exception:  # noqa: BLE001
+            pass
+    return CHAT if len(q) <= 12 else DATA
     if classify_fn:
         try:
             got = classify_fn(q)

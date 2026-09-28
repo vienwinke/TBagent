@@ -18,10 +18,40 @@ RAG_SYSTEM = """你是 treatbord 任务接取平台的业务助手。
 请**仅根据提供的资料**回答问题，遵守：
 - 资料足够：给出准确、简洁的中文回答（可分点），不要编造资料里没有的规则或数字；
 - 资料不足：如实说明"资料中没有相关内容"，并把 insufficient 设为 true；
-- 引用资料编号：在 used_sources 里列出你实际依据的资料编号（如 [1,3]）。
-只输出 JSON：{"answer": "...", "used_sources": [1,2], "insufficient": false}"""
+- **引用必须准确**：在 used_sources 里**原样复制**你实际依据的资料的标题行（【资料 X】里的 X，
+  例如 "01-业务规则.md › 任务状态机"），不要写编号、不要改写。
+只输出 JSON：{"answer": "...", "used_sources": ["<资料标题>"], "insufficient": false}"""
 
 LlmFn = Callable[[list[dict[str, str]]], dict[str, Any]]
+
+
+def _resolve_citations(used: list, hits: list[Hit]) -> list[str]:
+    """把模型给出的引用解析成**真实存在的来源标签**
+
+    实测踩坑：让模型引用"编号"时会指错（答案取自业务规则却引用了常见问题），
+    因此改为让它原样复制资料标题，并在这里做校验：匹配不上的丢弃，全丢则回退 Top-2。
+    """
+    labels = [h.chunk.cite() for h in hits]
+    picked: list[str] = []
+    for u in used:
+        s = str(u).strip()
+        if not s:
+            continue
+        if s.isdigit():                       # 兼容旧格式：编号
+            i = int(s)
+            if 1 <= i <= len(labels):
+                picked.append(labels[i - 1])
+            continue
+        for label in labels:                  # 标签：允许前缀/包含匹配（模型可能少写后缀）
+            if s == label or s in label or label in s:
+                picked.append(label)
+                break
+    seen, out = set(), []
+    for c in picked:
+        if c not in seen:
+            seen.add(c)
+            out.append(c)
+    return out or labels[:2]
 
 
 @dataclass
@@ -75,10 +105,7 @@ def answer(question: str, *, top_k: int | None = None, llm_fn: LlmFn | None = No
         if isinstance(raw, dict):
             res.answer = str(raw.get("answer", "")).strip()
             res.insufficient = bool(raw.get("insufficient", False))
-            used = raw.get("used_sources") or []
-            idxs = [int(x) for x in used if str(x).isdigit() or isinstance(x, int)]
-            res.citations = [hits[i - 1].chunk.cite() for i in idxs if 1 <= i <= len(hits)] or \
-                            [h.cite() for h in hits[:2]]
+            res.citations = _resolve_citations(raw.get("used_sources") or [], hits)
         else:
             res.answer = str(raw).strip()
             res.citations = [h.cite() for h in hits[:2]]
