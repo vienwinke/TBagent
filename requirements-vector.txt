@@ -1,0 +1,6 @@
+# ===== 可选：本地向量检索（BGE + FAISS，约 1GB 含 torch CPU）=====
+# Streamlit Cloud 免费版不建议安装（安装容易超时/超限）；公开演示用默认的 BM25 即可。
+# 本地启用：pip install -r requirements-vector.txt 且 .env 设 EMBED_BACKEND=local
+-r requirements.txt
+sentence-transformers>=3.0.0
+faiss-cpu>=1.8.0

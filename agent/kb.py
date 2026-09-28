@@ -137,7 +137,7 @@ class KnowledgeBase:
         if self._bm25 is None:
             # 标题是强信号（"任务状态机"必须能命中"状态"类提问），因此重复 3 次加权；
             # 文件名也做轻量加权（"常见问题"类提问）
-            self._bm25 = BM25Okapi([tokenize(" ".join([c.heading] * 3 + [c.doc, c.text]))
+            self._bm25 = BM25Okapi([tokenize(" ".join([c.heading] * 5 + [c.doc, c.text]))
                                     for c in self.chunks])
         scores = self._bm25.get_scores(tokenize(query))
         order = sorted(range(len(scores)), key=lambda i: -scores[i])
