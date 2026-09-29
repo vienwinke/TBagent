@@ -12,7 +12,10 @@ from __future__ import annotations
 from config import SQL_DIALECT
 
 DIALECT_RULES = {
-    "mysql": "数据库方言：MySQL 8。日期函数用 CURDATE() / DATE_SUB() / DATE_FORMAT() / HOUR()；表名不要加引号。",
+    # ⚠️ MySQL 是主路径：这里刻意保持为空。
+    #    实测给 MySQL 也注入方言说明（日期函数/不要加引号）后，60 题执行准确率从 90.2% 掉到 82.3%
+    #    （+8 个点噪声指令扰动主路径）；MySQL 的信息在下面 DOMAIN_RULES 第 2 行已有，无需重复。
+    "mysql": "",
     "sqlite": """数据库方言：SQLite（公开演示快照）。
 - 当前时间：`date('now')`；"今天"：`date(create_time) = date('now')`
 - 最近 N 天：`create_time >= datetime('now', '-7 day')`
@@ -68,7 +71,8 @@ NL2SQL_SYSTEM = """你是一位严谨的 MySQL 数据分析工程师。
 def nl2sql_messages(schema_text: str, question: str, *, error: str | None = None,
                     prev_sql: str | None = None) -> list[dict[str, str]]:
     """构造 NL2SQL 的对话消息；error/prev_sql 用于回环修复"""
-    rules = DOMAIN_RULES.replace("{DIALECT}", DIALECT_RULES.get(SQL_DIALECT, DIALECT_RULES["mysql"]))
+    dialect = DIALECT_RULES.get(SQL_DIALECT, "")
+    rules = DOMAIN_RULES.replace("{DIALECT}\n", (dialect + "\n") if dialect else "")
     user = f"""【可用表结构（已按相关度检索）】
 {schema_text}
 

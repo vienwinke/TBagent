@@ -167,7 +167,9 @@ def score(*, top_k=None, max_repair=1, label="baseline", limit=None) -> dict[str
     for c in cases:
         expect = c.get("expect", "answer")
         t0 = time.time()
-        r = nl2sql.answer(c["question"], top_k=top_k, max_repair=max_repair)
+        # ★ 评测必须绕开「问题→SQL」缓存：否则会复用上一轮生成的旧 SQL，
+        #   跑出来的分数反映的是历史结果而不是当前链路（实测踩到：tokens=0、P50=7ms）
+        r = nl2sql.answer(c["question"], top_k=top_k, max_repair=max_repair, use_cache=False)
         dt = time.time() - t0
         latencies.append(dt * 1000)
         tokens.append(r.usage.get("total_tokens", 0))
