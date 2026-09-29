@@ -124,6 +124,30 @@ class LLMConfig:
     def configured(self) -> bool:
         return bool(self.api_key)
 
+    def issues(self) -> list[str]:
+        """配置自检：返回人类可读的问题列表（云端部署最容易踩的坑都在这）"""
+        problems: list[str] = []
+        if not self.api_key:
+            problems.append("LLM_API_KEY 为空：请在 Secrets/.env 里填入真实 API Key")
+        else:
+            if self.api_key.isascii() is False:
+                bad = [c for c in self.api_key if ord(c) > 127][:6]
+                problems.append("LLM_API_KEY 含非 ASCII 字符 %s：HTTP 头只能放 ASCII，"
+                                "通常是**把占位符（如「你的 Command Code Key」）当成了密钥**，"
+                                "请到平台后台复制真实 Key" % "".join(bad))
+            low = self.api_key.lower()
+            if any(k in low for k in ("your", "你的", "changeme", "placeholder", "xxxx", "todo")):
+                problems.append("LLM_API_KEY 看起来是占位符，不是真实密钥")
+            if len(self.api_key) < 20:
+                problems.append("LLM_API_KEY 长度可疑（%d 字符）：真实密钥通常更长" % len(self.api_key))
+        if not self.base_url.isascii():
+            problems.append("LLM_BASE_URL 含非 ASCII 字符")
+        if not self.model.isascii():
+            problems.append("LLM_MODEL 含非 ASCII 字符（模型名必须与 /models 列表完全一致）")
+        if not self.base_url.startswith(("http://", "https://")):
+            problems.append("LLM_BASE_URL 必须以 http(s):// 开头")
+        return problems
+
 
 @dataclass(frozen=True)
 class DBConfig:

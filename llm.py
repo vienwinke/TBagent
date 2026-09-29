@@ -108,7 +108,10 @@ def chat(
         kwargs["response_format"] = {"type": "json_object"}
 
     if not LLM.configured:
-        raise LLMError("未配置 LLM_API_KEY（或 DEEPSEEK_API_KEY）：请在 .env 中填写后再调用模型")
+        raise LLMError("未配置 LLM_API_KEY（或 DEEPSEEK_API_KEY）：请在 .env / Secrets 中填写后再调用模型")
+    problems = LLM.issues()
+    if problems:
+        raise LLMError("大模型配置有误：%s" % "；".join(problems))
 
     attempts = 0
     last_exc: BaseException | None = None
@@ -124,6 +127,10 @@ def chat(
                          getattr(resp.usage, "total_tokens", "-"))
             return (resp.choices[0].message.content or "").strip()
         except BaseException as exc:  # noqa: BLE001
+            # httpx/urllib3 对请求头做 ASCII 编码，密钥含中文时报的错很难懂 → 直接给出可操作提示
+            if isinstance(exc, UnicodeEncodeError):
+                raise LLMError("请求头编码失败（UnicodeEncodeError）：LLM_API_KEY/LLM_BASE_URL/LLM_MODEL "
+                               "里有非 ASCII 字符，请检查是否把占位符当成了密钥") from exc
             last_exc = exc
             if attempt >= LLM.max_retries or not _retryable(exc):
                 break

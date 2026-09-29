@@ -62,6 +62,20 @@ def sidebar() -> None:
         except Exception:  # noqa: BLE001
             st.code("未构建（运行 scripts/build_knowledge.py）", language="text")
         st.divider()
+        problems = LLM.issues()
+        if problems:
+            st.error("⚠️ 配置需要修正（否则提问会失败）")
+            for pr in problems:
+                st.warning(pr)
+        else:
+            st.success("✅ 配置自检通过")
+        with st.expander("配置自检详情", expanded=bool(problems)):
+            st.write("key: %s" % ("已配置（%d 字符，纯 ASCII）" % len(LLM.api_key)
+                                  if LLM.configured and LLM.api_key.isascii() else "未配置 / 含非 ASCII"))
+            st.write("base_url: `%s`" % LLM.base_url)
+            st.write("model: `%s`" % LLM.model)
+            st.write("db: `%s`" % DB.label)
+        st.divider()
         s = llm_mod.USAGE.summary()
         st.caption("本次会话用量")
         c1, c2 = st.columns(2)
