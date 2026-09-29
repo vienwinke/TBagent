@@ -23,3 +23,7 @@ eval/out/
 __report_tmp__/
 data/schema_index.json
 
+
+# IDE 本地配置
+.idea/
+.vscode/
