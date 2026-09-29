@@ -127,16 +127,34 @@ class SchemaIndex:
         return [Hit(self.tables[i]["name"], round(float(scores[i]), 4)) for i in order]
 
     # ---------- 提示词片段 ----------
-    def describe(self, names: list[str], with_columns: bool = True) -> str:
+    def describe(self, names: list[str], with_columns: bool = True, *,
+                 max_columns: int | None = None, desc_max: int | None = None) -> str:
+        """生成给提示词用的 Schema 片段。
+
+        成本优化：列数上限（默认 SCHEMA_MAX_COLUMNS）+ 列描述截断（默认 SCHEMA_DESC_MAX），
+        既省 prefill token，又保留"有哪些列"这一关键信息（模型仍知道列存在，只是描述更短）。
+        """
+        from config import SCHEMA_DESC_MAX, SCHEMA_MAX_COLUMNS
+
+        max_cols = max_columns if max_columns is not None else SCHEMA_MAX_COLUMNS
+        dmax = desc_max if desc_max is not None else SCHEMA_DESC_MAX
         blocks = []
         for name in names:
             t = self._by_name.get(name)
             if not t:
                 continue
+            cols = t["columns"]
             lines = ["表 %s（%s，约 %d 行）" % (t["name"], t["desc"], t["rows"])]
             if with_columns:
-                for c in t["columns"]:
-                    lines.append("  %-22s %-26s %s" % (c["name"], c["type"], c.get("desc", "")))
+                shown = cols if max_cols <= 0 or len(cols) <= max_cols else cols[:max_cols]
+                for c in shown:
+                    desc = (c.get("desc") or "")
+                    if dmax > 0 and len(desc) > dmax:
+                        desc = desc[:dmax] + "…"
+                    lines.append("  %-22s %-26s %s" % (c["name"], c["type"], desc))
+                if len(shown) < len(cols):
+                    rest = ", ".join(c["name"] for c in cols[len(shown):])
+                    lines.append("  （其余列：%s）" % rest)
             blocks.append("\n".join(lines))
         return "\n\n".join(blocks)
 

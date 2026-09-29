@@ -19,6 +19,7 @@ from loguru import logger
 from config import setup_logging
 
 import llm as llm_mod
+from agent import cache as cache_mod
 from agent import executor as ex
 from agent import prompts
 from agent import sql_guard
@@ -38,6 +39,7 @@ class Nl2SqlResult:
     rows: list[dict[str, Any]] = field(default_factory=list)
     attempts: int = 0
     repaired: bool = False
+    cache_hit: bool = False                              # 是否命中"问题→SQL"缓存（省掉生成调用）
     raw_sqls: list[str] = field(default_factory=list)   # 每次尝试模型给出的原始 SQL（未过护栏）
     error: str | None = None
     stage: str = "init"          # init|generate|guard|execute|done|failed
@@ -51,7 +53,8 @@ class Nl2SqlResult:
         return {"question": self.question, "sql": self.sql, "reason": self.reason,
                 "tables": self.tables, "guard": self.guard, "query": self.query,
                 "row_count": self.query.get("row_count"), "attempts": self.attempts,
-                "repaired": self.repaired, "error": self.error, "stage": self.stage,
+                "repaired": self.repaired, "cache_hit": self.cache_hit,
+                "error": self.error, "stage": self.stage,
                 "raw_sqls": self.raw_sqls,
                 "usage": self.usage}
 
@@ -77,11 +80,32 @@ def answer(
     max_repair: int = 1,
     execute: bool = True,
     top_k: int | None = None,
+    use_cache: bool = True,
 ) -> Nl2SqlResult:
-    """把自然语言问题回答成「一条安全 SQL + 执行结果」"""
+    """把自然语言问题回答成「一条安全 SQL + 执行结果」
+
+    成本优化：命中「问题→SQL」缓存时**跳过生成**（0 次 LLM 调用），
+    但仍然重新过护栏 + 重新执行 —— 数据不陈旧，省的只是最贵的那次生成。
+    """
     call_llm = llm_fn or _default_llm_fn
     usage_before = llm_mod.USAGE.summary()
     res = Nl2SqlResult(question=question)
+
+    # 0) 缓存命中：复用上次的 SQL，重新执行
+    if use_cache and execute:
+        hit = cache_mod.cache().get(question, top_k)
+        if hit:
+            try:
+                g_cached = sql_guard.validate(hit["sql"])
+                qr_cached = ex.execute_readonly(g_cached.sql, check_cost=False)
+                res.sql, res.guard = g_cached.sql, g_cached.summary()
+                res.query, res.rows = qr_cached.summary(), qr_cached.as_dicts()
+                res.reason = "缓存命中：复用上次生成的 SQL（数据为本次重新执行）"
+                res.tables = hit.get("tables") or []
+                res.cache_hit, res.stage, res.attempts = True, "done", 0
+                return res
+            except Exception as exc:  # noqa: BLE001  缓存里的 SQL 已不可用 → 静默走正常生成
+                logger.debug("[nl2sql] 缓存 SQL 不可用，改为重新生成：{}", str(exc)[:80])
 
     # 1) Schema 检索
     idx = SchemaIndex()
@@ -129,6 +153,8 @@ def answer(
             continue
 
         res.query, res.rows = qr.summary(), qr.as_dicts()
+        if use_cache:
+            cache_mod.cache().put(question, g.sql, tables=res.tables, top_k=top_k)
         if qr.row_count == 0 and attempt < max_repair:
             error = "查询返回 0 行：条件或枚举值可能不对（例如状态值、时间范围）"
             prev_sql = g.sql

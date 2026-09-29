@@ -7,14 +7,14 @@
 | 项 | 链接 / 说明 |
 |---|---|
 | **仓库** | https://github.com/vienwinke/TBagent |
-| 在线演示 | *（Streamlit Community Cloud 部署后填这里）* |
+| 在线演示 | https://tbagent-cqpsjwkvdqcwvaiqgbyusz.streamlit.app/ |
 | 本地运行 | `streamlit run app.py` → http://localhost:8501 |
 | 部署步骤 | [docs/部署.md](docs/部署.md)（Cloud / HF Spaces / Docker 三选一） |
 | 评估报告 | [docs/评估报告.md](docs/评估报告.md)（数据分支 EX 90.2% · 知识分支命中率 100%） |
 | 面试讲稿 | [docs/面试讲稿.md](docs/面试讲稿.md) |
 
 ## 为什么这个项目值得看（面试向）
-
+s
 | 技术点 | 做法 | 可量化的效果 |
 |---|---|---|---|
 | **Schema 太大 → 幻觉** | 表/列中文描述向量化，只注入 Top-K 相关表 | token −60%，EX +9pt |

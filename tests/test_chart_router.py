@@ -69,13 +69,15 @@ def test_summarize_uses_injected_llm():
         captured["prompt"] = messages[-1]["content"]
         return "共 8 个任务。"
 
-    out = answer.summarize("任务有几个？", ["任务数"], [(8,)], llm_fn=fake)
+    # 显式关闭模板优先，测 LLM 路径（单行结果默认走模板）
+    out = answer.summarize("任务有几个？", ["任务数"], [(8,)], llm_fn=fake, template_first=False)
     assert out == "共 8 个任务。"
     assert "任务有几个" in captured["prompt"] and "任务数" in captured["prompt"]
 
 
 def test_summarize_handles_empty_rows():
-    out = answer.summarize("被封禁的用户有几个？", ["cnt"], [], llm_fn=lambda m: "没有查到符合条件的数据")
+    out = answer.summarize("被封禁的用户有几个？", ["cnt"], [],
+                           llm_fn=lambda m: "没有查到符合条件的数据", template_first=False)
     assert "没有查到" in out
 
 
@@ -83,5 +85,5 @@ def test_summarize_survives_llm_error():
     def boom(messages):
         raise RuntimeError("429")
 
-    out = answer.summarize("q", ["c"], [(1,)], llm_fn=boom)
+    out = answer.summarize("q", ["c"], [(1,)], llm_fn=boom, template_first=False)
     assert "转述失败" in out

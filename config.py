@@ -199,6 +199,13 @@ SENSITIVE_COLUMNS = frozenset({"openid", "unionid", "password_hash", "ip"})
 # 系统表（不参与 Schema 检索与白名单）
 SYSTEM_TABLES = frozenset({"flyway_schema_history"})
 
+# ---- 成本优化开关 ----
+CACHE_ENABLED = _env("CACHE_ENABLED", "true").lower() in ("1", "true", "yes")
+CACHE_TTL_SEC = int(_env("CACHE_TTL_SEC", "600") or 600)          # 问题→SQL 缓存有效期
+SUMMARY_TEMPLATE_FIRST = _env("SUMMARY_TEMPLATE_FIRST", "true").lower() in ("1", "true", "yes")
+SCHEMA_MAX_COLUMNS = int(_env("SCHEMA_MAX_COLUMNS", "18") or 18)  # 每张表最多注入多少列
+SCHEMA_DESC_MAX = int(_env("SCHEMA_DESC_MAX", "36") or 36)        # 列描述截断长度
+
 # 后端：mysql（真实库，用于完整评估）或 sqlite（公开演示快照，随仓库分发）
 DB_BACKEND = _env("DB_BACKEND", "mysql").lower()
 IS_SQLITE = DB_BACKEND == "sqlite"

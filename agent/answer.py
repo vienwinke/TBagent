@@ -19,8 +19,18 @@ SUMMARY_SYSTEM = """你是数据分析助手。根据【问题】和【查询结
 
 def summarize(question: str, columns: Sequence[str], rows: Sequence[Sequence[Any]],
               *, llm_fn: Callable[[list[dict[str, str]]], str] | None = None,
-              max_rows: int = 20) -> str:
-    """生成一句话答案（llm_fn 可注入，便于单测）"""
+              max_rows: int = 20, template_first: bool | None = None) -> str:
+    """生成一句话答案（llm_fn 可注入，便于单测）
+
+    成本优化：**简单结果直接用确定性模板**，不调 LLM ——
+    实测这类结果占多数，省下一次调用的输入 token（约 400~500）与 1~3 秒延迟。
+    复杂结果（多行多列）仍走 LLM 转述。
+    """
+    from config import SUMMARY_TEMPLATE_FIRST
+
+    use_template = SUMMARY_TEMPLATE_FIRST if template_first is None else template_first
+    if use_template and _is_simple(columns, rows):
+        return _fallback(len(rows), columns, rows)
     call = llm_fn or (lambda messages: llm_mod.chat(messages, temperature=0, max_tokens=256, tag="summary"))
     preview = [dict(zip(columns, r)) for r in list(rows)[:max_rows]]
     payload = "列：%s\n行数：%d\n数据：%s" % (", ".join(columns), len(rows), preview)
@@ -35,6 +45,13 @@ def summarize(question: str, columns: Sequence[str], rows: Sequence[Sequence[Any
         return _fallback(len(rows), columns, rows)
     except Exception as exc:  # noqa: BLE001
         return "（结果转述失败：%s）" % type(exc).__name__
+
+
+def _is_simple(columns: Sequence[str], rows: Sequence[Sequence[Any]]) -> bool:
+    """简单结果判定：单行（任意列数）或单列（任意行数）→ 模板化足以表达"""
+    if len(rows) <= 1:
+        return True
+    return len(columns) == 1
 
 
 def _fallback(n_rows: int, columns: Sequence[str], rows: Sequence[Sequence[Any]]) -> str:
