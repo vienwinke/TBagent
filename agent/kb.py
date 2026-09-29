@@ -84,27 +84,29 @@ def split_markdown(text: str, chunk_size: int = 300, overlap: int = 50) -> list[
                             cur = s
         if cur:
             chunks.append((h, cur))
-    # 加重叠：把上一块尾部拼到下一块开头
-    if overlap > 0:
-        out = []
-        for i, (h, c) in enumerate(chunks):
-            if i and chunks[i - 1][1][-overlap:]:
-                out.append((h, (chunks[i - 1][1][-overlap:] + "\n" + c).strip()))
-            else:
-                out.append((h, c))
-        chunks = out
+    # 注意：这里**不做**"把上一段尾巴拼到下一段"的重叠。
+    # 实测该做法会让每段开头混入上一段的文字（如"名额规则"开头带"接取状态机"的内容），
+    # 直接污染检索排序（Top-1 从正确翻到错误）。切分本身就按段落/句子边界，语义不会割裂。
     return chunks
 
 
-def tokenize(text: str) -> list[str]:
-    """中文 bigram + 英文标识符（与 Schema 检索保持一致的轻量分词）"""
+# 中文疑问/功能词 bigram：不携带业务信息，却容易让"能查哪些内容"这类句子抢分（实测踩到）
+ZH_STOP = {
+    "哪些", "什么", "怎么", "如何", "是否", "能否", "可以", "一下", "我们", "你们", "他们",
+    "这个", "那个", "有哪", "请问", "多少", "几个", "需要", "进行", "已经", "以及", "或者",
+    "因为", "所以", "并且", "而且", "就是", "还是", "不是", "没有", "如果", "那么",
+}
+
+
+def tokenize(text: str, *, drop_stop: bool = True) -> list[str]:
+    """中文 bigram + 英文标识符（轻量分词，无需第三方分词库）"""
     text = text.lower()
     tokens = re.findall(r"[a-z_][a-z0-9_]{1,}", text)
     for seg in re.findall(r"[\u4e00-\u9fff]+", text):
         tokens += [seg[i:i + 2] for i in range(len(seg) - 1)]
         if len(seg) == 1:
             tokens.append(seg)
-    return tokens
+    return [x for x in tokens if x not in ZH_STOP] if drop_stop else tokens
 
 
 def rrf_fuse(rankings: Iterable[list[int]], k: int = 60) -> list[tuple[int, float]]:
@@ -121,10 +123,12 @@ class KnowledgeBase:
         self.dir = kb_dir or KB_DIR
         self.chunks: list[Chunk] = []
         for path in sorted(self.dir.glob("*.md")):
-            for i, (heading, text) in enumerate(split_markdown(path.read_text(encoding="utf-8"),
-                                                              chunk_size, overlap)):
-                self.chunks.append(Chunk(len(self.chunks), path.name, heading, text))
+            for heading, text in split_markdown(path.read_text(encoding="utf-8"), chunk_size, overlap):
+                # 标题内联：检索时该段自带标题信号，避免"标题属于 A、内容被 B 抢走"
+                self.chunks.append(Chunk(len(self.chunks), path.name, heading,
+                                         "【%s】\n%s" % (heading, text) if heading else text))
         self._bm25 = None
+        self._bm25_title = None
         self._embedder = None
         self._vectors = None
         if not self.chunks:
@@ -135,11 +139,15 @@ class KnowledgeBase:
         from rank_bm25 import BM25Okapi
 
         if self._bm25 is None:
-            # 标题是强信号（"任务状态机"必须能命中"状态"类提问），因此重复 3 次加权；
-            # 文件名也做轻量加权（"常见问题"类提问）
-            self._bm25 = BM25Okapi([tokenize(" ".join([c.heading] * 5 + [c.doc, c.text]))
-                                    for c in self.chunks])
-        scores = self._bm25.get_scores(tokenize(query))
+            # 标题已内联进文本（见 __init__），因此正文文档无需再重复标题；
+            # 另建一份"仅标题"的 BM25 做字段加权 —— 参数由 9 组对比实验选出：
+            # 标题重复=1 且 标题权重=1.0 → Top-1 7/9（重复 5 次或权重 0.5 均为 6/9）
+            self._bm25 = BM25Okapi([tokenize(" ".join([c.doc, c.text])) for c in self.chunks])
+            self._bm25_title = BM25Okapi([tokenize(c.heading) or ["_"] for c in self.chunks])
+        q = tokenize(query)
+        body = self._bm25.get_scores(q)
+        title = self._bm25_title.get_scores(q)
+        scores = [b + 1.0 * s for b, s in zip(body, title)]
         order = sorted(range(len(scores)), key=lambda i: -scores[i])
         return [i for i in order if scores[i] > 0]
 
