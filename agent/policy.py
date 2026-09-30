@@ -362,13 +362,58 @@ def rewrite(sql: str, principal: Principal) -> RewrittenSql:
     if rewritten_tables:
         warnings.append("已按身份限定表: %s" % ", ".join(sorted(set(rewritten_tables))))
 
-    return RewrittenSql(
+    result = RewrittenSql(
         sql=root.sql(dialect=DIALECT),
         tables=guard.tables,
         principal=principal,
         rewritten_tables=sorted(set(rewritten_tables)),
         warnings=warnings,
     )
+    # ★ fail-closed 自检：确认每一处受限表引用都被行级过滤包住
+    missed = unfiltered_refs(result)
+    if missed:
+        raise PolicyDenied(
+            "行级重写自检未通过：%s 仍有未被过滤的引用" % ", ".join(missed),
+            reason=DENY_INTERNAL,
+        )
+    return result
+
+
+def unfiltered_refs(rewritten: RewrittenSql) -> list[str]:
+    """自检：重写后的 SQL 里是否还有**未被行级过滤包住**的受限表引用
+
+    返回违规表名（空 = 通过）。这是 fail-closed 的第二道保险：
+    派生表替换一旦因 sqlglot 行为变化而漏掉某个引用（UNION 分支、深层子查询、
+    新语法），这里当场发现，而不是等用户查到了别人的数据。
+
+    判定方式与测试一致：从每个受限表的 Table 节点向上找，看是否存在一个
+    "带 WHERE 的派生表"祖先 —— 只要有一处引用不在其中，就算违规。
+    """
+    if rewritten.principal.is_privileged:
+        return []                                   # 运营及以上不做行级限制
+
+    restricted = {t for t, cond in USER_POLICY.items() if cond is not None}
+    try:
+        root = sqlglot.parse_one(rewritten.sql, read=DIALECT)
+    except Exception:  # noqa: BLE001  解析不了就当作最坏情况
+        return sorted(restricted)
+    if root is None:
+        return sorted(restricted)
+
+    violations: list[str] = []
+    for table in root.find_all(exp.Table):
+        name = (table.name or "").lower()
+        if name not in restricted:
+            continue
+        cursor, covered = table, False
+        while cursor.parent is not None:
+            cursor = cursor.parent
+            if isinstance(cursor, exp.Subquery) and cursor.this.args.get("where") is not None:
+                covered = True
+                break
+        if not covered:
+            violations.append(name)
+    return sorted(set(violations))
 
 
 def cache_scope(principal: Principal) -> str:

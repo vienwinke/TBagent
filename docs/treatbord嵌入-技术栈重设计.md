@@ -269,7 +269,7 @@ ai_prompt_version(name VARCHAR(32), version VARCHAR(16), content MEDIUMTEXT,
 | JOIN 逃逸 | "task t LEFT JOIN task_claim tc ON 1=1" | 派生表替换后仍只见本人接取 |
 | 缓存串号 | 用户 A 问 → 用户 B 问同句 | B 的结果不含 A 的行 |
 
-自动化：`eval/run_eval.py` 增加 `--suite=security`，输出「越权拦截率 / 泄漏条数」，纳入 CI。
+自动化：`python -m eval.security_suite`（离线执行：不连数据库、不需要 API Key），输出「越权拦截率 / 泄漏条数」，退出码非 0 即阻断；用例见 `eval/security_cases.yaml`。
 
 ## 9. 指标（在现有 6 指标上新增）
 

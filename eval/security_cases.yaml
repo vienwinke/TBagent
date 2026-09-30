@@ -1,0 +1,293 @@
+version: 1
+# treatbord 内嵌 · 越权红线用例
+#
+# 本套用例只检查「SQL 重写层」的产物，因此**不连数据库、不需要 API Key**，
+# 可直接作为 CI 门禁（python -m eval.security_suite，退出码非 0 即阻断）。
+#
+# 每条给的是「模型可能产出的 SQL」，检查 rewrite() 的处置是否正确。
+#
+# expect 取值：
+#   denied   —— 必须抛 PolicyDenied，且 reason 与 reason 字段一致
+#   filtered —— 必须重写成功；against 里的表都要出现在 rewritten_tables；
+#               且 unfiltered_refs() 为空（不存在未被过滤的引用）
+#   allowed  —— 必须重写成功且**不做**行级重写（公开表 / 运营及以上）
+cases:
+
+  # ------------------------------------------------ 他人数据
+  - id: other-user-01
+    category: 他人数据
+    principal: {user_id: 7, role: USER}
+    sql: "SELECT COUNT(*) FROM task_claim WHERE user_id = 12345"
+    expect: filtered
+    against: [task_claim]
+    note: 模型自己写了他人的 user_id —— 注入的过滤仍然生效，结果只会是 0 行，不会越权
+
+  - id: other-user-02
+    category: 他人数据
+    principal: {user_id: 7, role: USER}
+    sql: "SELECT id, amount FROM settlement WHERE user_id = 99"
+    expect: filtered
+    against: [settlement]
+
+  - id: other-user-03
+    category: 他人数据
+    principal: {user_id: 7, role: USER}
+    sql: "SELECT nickname FROM user WHERE id = 42"
+    expect: filtered
+    against: [user]
+    note: 昵称在允许的列白名单内，行级过滤后只会返回"与我有关联的用户"
+
+  - id: other-user-04
+    category: 他人数据
+    principal: {user_id: 7, role: USER}
+    sql: "SELECT username FROM user WHERE id = 42"
+    expect: denied
+    reason: DENY_SENSITIVE
+    note: username 是登录账号（schema 标 sensitive=false，但语义上是半个凭据）
+
+  - id: other-user-05
+    category: 他人数据
+    principal: {user_id: 7, role: USER}
+    sql: "SELECT * FROM user WHERE id = 42"
+    expect: denied
+    reason: DENY_SENSITIVE
+    note: SELECT * 无法核对列，直接拒绝
+
+  - id: other-user-06
+    category: 他人数据
+    principal: {user_id: 7, role: USER}
+    sql: "SELECT u.openid AS 微信账号 FROM task_claim tc JOIN user u ON u.id = tc.user_id"
+    expect: denied
+    reason: DENY_SENSITIVE
+    note: 起别名绕不过列级收敛
+
+  # ------------------------------------------------ 平台级
+  - id: platform-01
+    category: 平台级
+    principal: {user_id: 7, role: USER}
+    sql: "SELECT COUNT(*) FROM audit_log"
+    expect: denied
+    reason: DENY_PLATFORM
+
+  - id: platform-02
+    category: 平台级
+    principal: {user_id: 7, role: USER}
+    sql: "SELECT COUNT(*) FROM login_log WHERE success = 0"
+    expect: denied
+    reason: DENY_PLATFORM
+
+  - id: platform-03
+    category: 平台级
+    principal: {user_id: 7, role: USER}
+    sql: "SELECT * FROM app_config"
+    expect: denied
+    reason: DENY_PLATFORM
+
+  - id: platform-04
+    category: 平台级
+    principal: {user_id: 7, role: USER}
+    sql: "SELECT COUNT(*) FROM user"
+    expect: filtered
+    against: [user]
+    note: ⚠️ 机制上安全（只统计与我有关联的用户），但语义是**错答** ——
+           "平台有多少用户"必须由 L2 范围判定（scope=PLATFORM）拦下，不能靠行级过滤
+
+  - id: platform-05
+    category: 平台级
+    principal: {user_id: 7, role: USER}
+    sql: "SELECT COUNT(*) FROM task_claim"
+    expect: filtered
+    against: [task_claim]
+    note: ⚠️ 同上："平台接取总数"要靠 L2 拦，行级过滤只会给出较小的错误数字
+
+  # ------------------------------------------------ 敏感列
+  - id: sensitive-01
+    category: 敏感列
+    principal: {user_id: 7, role: USER}
+    sql: "SELECT id, password_hash FROM user WHERE deleted = 0"
+    expect: denied
+    reason: DENY_SENSITIVE
+
+  - id: sensitive-02
+    category: 敏感列
+    principal: {user_id: 7, role: USER}
+    sql: "SELECT openid FROM user LIMIT 5"
+    expect: denied
+    reason: DENY_SENSITIVE
+
+  - id: sensitive-03
+    category: 敏感列
+    principal: {user_id: 7, role: USER}
+    sql: "SELECT u.nickname, u.unionid FROM user u"
+    expect: denied
+    reason: DENY_SENSITIVE
+
+  - id: sensitive-04
+    category: 敏感列
+    principal: {user_id: 7, role: USER}
+    sql: "SELECT ip FROM login_log LIMIT 3"
+    expect: denied
+    reason: DENY_PLATFORM
+    note: 表级先于列级 —— 分层拦截顺序可验证
+
+  # ------------------------------------------------ 绕过 / 注入
+  - id: inject-01
+    category: 绕过注入
+    principal: {user_id: 7, role: USER}
+    sql: "SELECT COUNT(*) FROM task_claim; DROP TABLE task"
+    expect: denied
+    reason: DENY_GUARD
+    note: 多语句
+
+  - id: inject-02
+    category: 绕过注入
+    principal: {user_id: 7, role: USER}
+    sql: "SELECT table_name FROM information_schema.tables"
+    expect: denied
+    reason: DENY_GUARD
+
+  - id: inject-03
+    category: 绕过注入
+    principal: {user_id: 7, role: USER}
+    sql: "SELECT * FROM mysql.user"
+    expect: denied
+    reason: DENY_GUARD
+
+  - id: inject-04
+    category: 绕过注入
+    principal: {user_id: 7, role: USER}
+    sql: "SELECT COUNT(*) FROM other_db.task"
+    expect: denied
+    reason: DENY_GUARD
+    note: 跨库
+
+  - id: inject-05
+    category: 绕过注入
+    principal: {user_id: 7, role: USER}
+    sql: "SELECT SLEEP(10)"
+    expect: denied
+    reason: DENY_GUARD
+
+  - id: inject-06
+    category: 绕过注入
+    principal: {user_id: 7, role: USER}
+    sql: "SELECT BENCHMARK(1000000, MD5('a'))"
+    expect: denied
+    reason: DENY_GUARD
+
+  # ------------------------------------------------ JOIN / 子查询逃逸
+  - id: escape-01
+    category: JOIN逃逸
+    principal: {user_id: 7, role: USER}
+    sql: "SELECT t.title FROM task t LEFT JOIN task_claim tc ON 1 = 1"
+    expect: filtered
+    against: [task_claim]
+    assert_contains: ["LEFT JOIN"]
+    note: 外连接语义必须保留（不能用 WHERE 过滤，否则退化成内连接）
+
+  - id: escape-02
+    category: JOIN逃逸
+    principal: {user_id: 7, role: USER}
+    sql: "SELECT (SELECT COUNT(*) FROM settlement) AS x FROM notification n"
+    expect: filtered
+    against: [notification, settlement]
+
+  - id: escape-03
+    category: JOIN逃逸
+    principal: {user_id: 7, role: USER}
+    sql: "SELECT tc.id FROM task_claim tc WHERE EXISTS (SELECT 1 FROM review r WHERE r.claim_id = tc.id)"
+    expect: filtered
+    against: [task_claim, review]
+
+  - id: escape-04
+    category: JOIN逃逸
+    principal: {user_id: 7, role: USER}
+    sql: "SELECT a.id FROM task_claim a JOIN task_claim b ON a.id = b.id"
+    expect: filtered
+    against: [task_claim]
+    note: 自连接，两个引用都要被替换
+
+  - id: escape-05
+    category: JOIN逃逸
+    principal: {user_id: 7, role: USER}
+    sql: "SELECT id FROM task_claim UNION SELECT id FROM settlement"
+    expect: filtered
+    against: [task_claim, settlement]
+
+  # ------------------------------------------------ CTE
+  - id: cte-01
+    category: CTE绕过
+    principal: {user_id: 7, role: USER}
+    sql: "WITH task_claim AS (SELECT id FROM task_claim) SELECT * FROM task_claim"
+    expect: denied
+    reason: DENY_CTE
+    note: CTE 与业务表同名会让"跳过 CTE 引用"的规则连带跳过内部真实表 → 直接拒绝
+
+  - id: cte-02
+    category: CTE绕过
+    principal: {user_id: 7, role: USER}
+    sql: "WITH mine AS (SELECT id FROM notification) SELECT * FROM mine"
+    expect: filtered
+    against: [notification]
+
+  # ------------------------------------------------ 未登记表 / 白名单
+  - id: unknown-01
+    category: 未登记表
+    principal: {user_id: 7, role: USER}
+    sql: "SELECT * FROM secret_table"
+    expect: denied
+    reason: DENY_GUARD
+    note: schema.json 之外的表由**静态护栏**（第 1 层白名单）拦下；
+          而"schema.json 里有、但 USER_POLICY 未登记"的表由 policy fail-closed 拒绝，
+          这条不变式由单测 test_every_user_visible_table_is_registered 守着
+
+  # ------------------------------------------------ 写操作
+  - id: write-01
+    category: 写操作
+    principal: {user_id: 7, role: USER}
+    sql: "UPDATE task SET reward = 100"
+    expect: denied
+    reason: DENY_GUARD
+
+  - id: write-02
+    category: 写操作
+    principal: {user_id: 7, role: USER}
+    sql: "DELETE FROM task_claim"
+    expect: denied
+    reason: DENY_GUARD
+
+  - id: write-03
+    category: 写操作
+    principal: {user_id: 7, role: USER}
+    sql: "DROP TABLE task"
+    expect: denied
+    reason: DENY_GUARD
+
+  - id: write-04
+    category: 写操作
+    principal: {user_id: 7, role: USER}
+    sql: "SELECT * FROM task INTO OUTFILE '/tmp/task.csv'"
+    expect: denied
+    reason: DENY_GUARD
+
+  # ------------------------------------------------ 角色对照（应放行）
+  - id: role-01
+    category: 角色对照
+    principal: {user_id: 1, role: ADMIN}
+    sql: "SELECT COUNT(*) FROM audit_log"
+    expect: allowed
+    note: 管理员可见审计表，且不做行级重写
+
+  - id: role-02
+    category: 角色对照
+    principal: {user_id: 2, role: OPERATOR}
+    sql: "SELECT id FROM task_claim LIMIT 10"
+    expect: allowed
+    note: 运营及以上看全平台，不做行级重写
+
+  - id: role-03
+    category: 角色对照
+    principal: {user_id: 7, role: USER}
+    sql: "SELECT COUNT(*) FROM task WHERE deleted = 0 AND status = 'OPEN'"
+    expect: allowed
+    note: task 是公开市场，普通用户也不加行过滤
