@@ -147,7 +147,7 @@ prompts_user.chart_messages(columns, rows, question)
 prompts_user.deny_text(reason, *, suggestions=None) -> str
 prompts_user.REPAIR_KINDS / REPAIR_HINTS / DENY_TEMPLATES / PROMPT_VERSION
 
-# ── 数据分支（agent/nl2sql.py）—— 已接线，但尚未经过 policy（见文末待定项）
+# ── 数据分支（agent/nl2sql.py）—— ★ 已接线：生成后经 policy.rewrite → policy.execute
 nl2sql.answer(question, *, principal: Principal | None = None, llm_fn=None,
               max_repair=1, execute=True, top_k=None, use_cache=True) -> Nl2SqlResult
 
@@ -195,6 +195,6 @@ python -m pytest -q                    # 含 policy 42 条 + 安全套件门禁
 
 | # | 待定 | 影响 |
 |---|---|---|
-| A | 单机（Streamlit / CLI / 评测）`principal=None` 时按"单机管理员"还是"拒绝执行" | 决定 `nl2sql.answer` 的默认行为与 60 题评估口径 |
+| A | ~~单机 `principal=None` 的语义~~ **已定**：按「单机管理员」处理（不做行级隔离），但 `Nl2SqlResult.isolated=False` + 首次使用时告警；服务层必须显式传 principal | 已实现 |
 | B | `executor.execute_readonly` 是否加硬约束（只接受 `RewrittenSql`） | 决定 `policy.execute` 是否成为**唯一**入口 |
 | C | `main`/`内嵌` 历史里的旧密钥处置（轮换 / 擦除历史 / 忽略） | 安全收尾 |

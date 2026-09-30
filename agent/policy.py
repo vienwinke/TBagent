@@ -193,6 +193,7 @@ class RewrittenSql:
     policy_version: str = POLICY_VERSION
     rewritten_tables: list[str] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
+    guard: dict = field(default_factory=dict)      # sql_guard.validate().summary()
 
 
 @lru_cache(maxsize=1)
@@ -320,7 +321,8 @@ def rewrite(sql: str, principal: Principal) -> RewrittenSql:
 
     # 3) 运营及以上：不做行级/列级限制
     if principal.is_privileged:
-        return RewrittenSql(sql=guard.sql, tables=guard.tables, principal=principal, warnings=warnings)
+        return RewrittenSql(sql=guard.sql, tables=guard.tables, principal=principal,
+                            warnings=warnings, guard=guard.summary())
 
     root = sqlglot.parse_one(guard.sql, read=DIALECT)
     if root is None:
@@ -368,6 +370,7 @@ def rewrite(sql: str, principal: Principal) -> RewrittenSql:
         principal=principal,
         rewritten_tables=sorted(set(rewritten_tables)),
         warnings=warnings,
+        guard=guard.summary(),
     )
     # ★ fail-closed 自检：确认每一处受限表引用都被行级过滤包住
     missed = unfiltered_refs(result)

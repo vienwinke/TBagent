@@ -28,10 +28,15 @@ from loguru import logger
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from agent import executor as ex          # noqa: E402
 from agent import nl2sql                  # noqa: E402
+from agent import policy                  # noqa: E402
 from agent import sql_guard               # noqa: E402
+from agent.policy import Principal        # noqa: E402
 from config import setup_logging          # noqa: E402
+
+# 评测以「运营视角」跑：参考 SQL 是全库口径，必须与线上 USER 视角分开
+# （USER 视角的越权用例见 eval/security_cases.yaml）
+EVAL_PRINCIPAL = Principal(user_id=1, role="ADMIN")
 
 CASES = ROOT / "eval" / "cases.yaml"
 OUT = ROOT / "eval" / "out"
@@ -118,13 +123,13 @@ def verify_references() -> dict[str, Any]:
         try:
             if expect == "reject":
                 try:
-                    sql_guard.validate(sql)
+                    policy.rewrite(sql, EVAL_PRINCIPAL)
                     rec["detail"] = "陷阱题未被拦截"
-                except sql_guard.SqlGuardError as e:
+                except policy.PolicyDenied as e:
                     rec.update(status="PASS", detail="护栏拦截: " + str(e)[:60])
             else:
-                g = sql_guard.validate(sql)
-                qr = ex.execute_readonly(g.sql, check_cost=False)
+                rw = policy.rewrite(sql, EVAL_PRINCIPAL)
+                qr = policy.execute(rw, check_cost=False)
                 rec["expected"] = {"rows": qr.row_count, "hash": rows_hash(qr.rows),
                                    "columns": qr.columns, "truncated": qr.truncated,
                                    "sample": [list(map(str, r)) for r in qr.rows[:3]],
@@ -208,8 +213,8 @@ def score(*, top_k=None, max_repair=1, label="baseline", limit=None) -> dict[str
                 n_ref = len(ref_meta.get("columns") or [])
                 n_got = len(r.query.get("columns") or [])
                 try:
-                    g2 = sql_guard.validate(c.get("reference_sql") or "")
-                    ref_qr = ex.execute_readonly(g2.sql, check_cost=False)
+                    rw2 = policy.rewrite(c.get("reference_sql") or "", EVAL_PRINCIPAL)
+                    ref_qr = policy.execute(rw2, check_cost=False)
                     # 注意：reference 侧是 execute_readonly 返回的【元组】，agent 侧是 as_dicts 的【字典】，
                     # 之前对元组误调 .values() 导致异常被静默吞掉、宽松判定从未生效
                     relaxed = relaxed_match(list(ref_qr.rows),

@@ -12,6 +12,7 @@ llm_fn 可注入（默认走 llm.chat_json），因此**不依赖 API Key 也能
 """
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass, field
 from typing import Any, Callable
 
@@ -24,14 +25,41 @@ from agent import executor as ex
 from agent import policy
 from agent import prompts
 from agent import sql_guard
-from agent.policy import Principal
-from agent.schema_index import SchemaIndex
+from agent.policy import ROLE_ADMIN, Principal
+from agent.schema_index import SchemaIndex, load_schema
 
 LlmFn = Callable[[list[dict[str, str]]], dict[str, Any]]
 
-# 单机场景（Streamlit / CLI / 评测）没有身份，共用同一个 scope；
-# 服务化（小程序）**必须**传 principal，否则多用户会命中彼此的缓存 —— 越权。
-LOCAL_SCOPE = "local"
+_local_warned = False
+
+
+def _local_principal() -> Principal:
+    """单机（Streamlit / CLI / 评测）没有身份时使用的合成身份
+
+    ⚠️ 按「单机管理员」处理 = **不做行级隔离**。为防止服务化时静默漏传身份：
+      1) Nl2SqlResult.isolated 会标记为 False（每个结果都可见）；
+      2) 进程内首次使用时打一条 WARNING。
+    服务层（pipeline）应把 principal 作为必填参数，从根上避免漏传。
+    用户 id 可用 LOCAL_USER_ID 覆盖，仅用于审计归属。
+    """
+    global _local_warned
+    if not _local_warned:
+        logger.warning("[nl2sql] 未传 principal：按单机管理员处理，不做行级隔离。"
+                       "服务化调用必须显式传入身份（见 docs/treatbord嵌入-接口契约.md）")
+        _local_warned = True
+    return Principal(user_id=int(os.getenv("LOCAL_USER_ID", "1") or 1), role=ROLE_ADMIN)
+
+
+def _scoped_index(principal: Principal) -> SchemaIndex:
+    """只让角色可见表进入 Schema 检索与提示词
+
+    否则普通用户的 prompt 里会出现 audit_log / login_log / app_config 的列描述
+    （实测过：一次普通提问命中了 4 张对 USER 不可见的表）——
+    既是 token 浪费，也是信息暴露。
+    """
+    visible = policy.visible_tables(principal)
+    tables = [t for t in load_schema()["tables"] if t["name"].lower() in visible]
+    return SchemaIndex(tables=tables)
 
 
 @dataclass
@@ -46,6 +74,8 @@ class Nl2SqlResult:
     attempts: int = 0
     repaired: bool = False
     cache_hit: bool = False                              # 是否命中"问题→SQL"缓存（省掉生成调用）
+    isolated: bool = False                               # 是否做了行级隔离（USER 视角为 True）
+    deny_reason: str | None = None                       # 被策略拒绝时的原因（DENY_*）
     raw_sqls: list[str] = field(default_factory=list)   # 每次尝试模型给出的原始 SQL（未过护栏）
     error: str | None = None
     stage: str = "init"          # init|generate|guard|execute|done|failed
@@ -60,6 +90,7 @@ class Nl2SqlResult:
                 "tables": self.tables, "guard": self.guard, "query": self.query,
                 "row_count": self.query.get("row_count"), "attempts": self.attempts,
                 "repaired": self.repaired, "cache_hit": self.cache_hit,
+                "isolated": self.isolated, "deny_reason": self.deny_reason,
                 "error": self.error, "stage": self.stage,
                 "raw_sqls": self.raw_sqls,
                 "usage": self.usage}
@@ -97,17 +128,21 @@ def answer(
     call_llm = llm_fn or _default_llm_fn
     usage_before = llm_mod.USAGE.summary()
     res = Nl2SqlResult(question=question)
-    # 缓存隔离维度：带身份时按 角色 + 策略版本 隔离；单机场景退回 LOCAL_SCOPE
-    scope = policy.cache_scope(principal) if principal is not None else LOCAL_SCOPE
+    if principal is None:
+        principal = _local_principal()
+    res.isolated = not principal.is_privileged
+    # 缓存隔离维度：角色 + 策略版本（同一个 principal 贯穿本次请求的所有环节）
+    scope = policy.cache_scope(principal)
 
     # 0) 缓存命中：复用上次的 SQL，重新执行
     if use_cache and execute:
         hit = cache_mod.cache().get(question, top_k, scope=scope)
         if hit:
             try:
-                g_cached = sql_guard.validate(hit["sql"])
-                qr_cached = ex.execute_readonly(g_cached.sql, check_cost=False)
-                res.sql, res.guard = g_cached.sql, g_cached.summary()
+                # ★ 缓存里存的是**重写前**的 SQL：命中后仍然重新过策略层（唯一出口）
+                rw_cached = policy.rewrite(hit["sql"], principal)
+                qr_cached = policy.execute(rw_cached, check_cost=False)
+                res.sql, res.guard = rw_cached.sql, rw_cached.guard
                 res.query, res.rows = qr_cached.summary(), qr_cached.as_dicts()
                 res.reason = "缓存命中：复用上次生成的 SQL（数据为本次重新执行）"
                 res.tables = hit.get("tables") or []
@@ -116,12 +151,12 @@ def answer(
             except Exception as exc:  # noqa: BLE001  缓存里的 SQL 已不可用 → 静默走正常生成
                 logger.debug("[nl2sql] 缓存 SQL 不可用，改为重新生成：{}", str(exc)[:80])
 
-    # 1) Schema 检索
-    idx = SchemaIndex()
+    # 1) Schema 检索（★ 只在角色可见表内检索与注入）
+    idx = _scoped_index(principal)
     hits = idx.search(question, top_k)
     res.tables = [h.table for h in hits]
     schema_text = idx.describe(res.tables)
-    logger.debug("[nl2sql] 检索到表: {}", res.tables)
+    logger.debug("[nl2sql] 角色={} 检索到表: {}", principal.role, res.tables)
 
     error: str | None = None
     prev_sql: str | None = None
@@ -138,41 +173,51 @@ def answer(
             logger.warning("[nl2sql] 第 {} 次生成失败: {}", res.attempts, error)
             continue
 
-        # 3) 护栏① 静态校验
+        # 3) ★ 唯一出口：静态护栏 + 行级隔离重写（policy.rewrite 内部先跑 sql_guard）
         res.stage = "guard"
         try:
-            g = sql_guard.validate(sql)
-        except sql_guard.SqlGuardError as exc:
-            error, prev_sql = "静态校验未通过: %s" % exc, sql
-            logger.warning("[nl2sql] 第 {} 次被护栏拦截: {}", res.attempts, exc)
+            rw = policy.rewrite(sql, principal)
+        except policy.PolicyDenied as exc:
+            res.deny_reason = exc.reason
+            kind = policy.POLICY_TO_KIND.get(exc.reason)
+            if kind is None:
+                # 语义越权 / 重写层异常：重试无意义 → 直接拒答（不回环、不查库）
+                res.stage, res.error = "denied", "策略拒绝[%s]: %s" % (exc.reason, exc)
+                logger.warning("[nl2sql] 被策略直接拒绝（不回环）: {}", exc.reason)
+                break
+            error, prev_sql = "策略拦截[%s]: %s" % (exc.reason, exc), sql
+            logger.warning("[nl2sql] 第 {} 次被策略拦截（{}）: {}", res.attempts, kind, exc)
             continue
 
-        res.sql, res.reason, res.guard = g.sql, reason, g.summary()
+        res.sql, res.reason, res.guard = rw.sql, reason, rw.guard
         if not execute:
             res.stage = "done"
             break
 
-        # 4) 护栏②③ + 执行
+        # 4) 执行（护栏②③在 executor 内：只读会话 + 超时 + EXPLAIN 限额）
         res.stage = "execute"
         try:
-            qr = ex.execute_readonly(g.sql, check_cost=False)
+            qr = policy.execute(rw, check_cost=False)
         except ex.SqlError as exc:
-            error, prev_sql = "执行失败: %s" % exc, g.sql
+            error, prev_sql = "执行失败: %s" % exc, rw.sql
             logger.warning("[nl2sql] 第 {} 次执行失败: {}", res.attempts, exc)
             continue
 
         res.query, res.rows = qr.summary(), qr.as_dicts()
         if use_cache:
-            cache_mod.cache().put(question, g.sql, tables=res.tables, top_k=top_k, scope=scope)
+            # ★ 只缓存**重写前**的 SQL（带身份的重写结果绝不能复用给他人）
+            cache_mod.cache().put(question, sql, tables=res.tables, top_k=top_k, scope=scope)
         if qr.row_count == 0 and attempt < max_repair:
             error = "查询返回 0 行：条件或枚举值可能不对（例如状态值、时间范围）"
-            prev_sql = g.sql
+            prev_sql = rw.sql
             logger.info("[nl2sql] 第 {} 次返回 0 行，触发回环修复", res.attempts)
             continue
         res.stage = "done"
         break
 
-    if res.stage != "done":
+    if res.stage == "denied":
+        pass                                          # 策略直接拒绝：保留 stage/error/deny_reason
+    elif res.stage != "done":
         res.stage, res.error = "failed", error
         if prev_sql:
             res.sql = prev_sql
