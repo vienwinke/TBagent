@@ -105,14 +105,6 @@ def route(question: str, *, classify_fn: Callable[[str], str] | None = None) -> 
         except Exception:  # noqa: BLE001
             pass
     return CHAT if len(q) <= 12 else DATA
-    if classify_fn:
-        try:
-            got = classify_fn(q)
-            if got in (CHAT, KNOWLEDGE, DATA):
-                return got
-        except Exception:  # noqa: BLE001
-            pass
-    return DATA
 
 
 ROUTE_SYSTEM = """判断用户问题的类型，只回复一个词：

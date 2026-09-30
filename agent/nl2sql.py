@@ -21,11 +21,17 @@ from config import setup_logging
 import llm as llm_mod
 from agent import cache as cache_mod
 from agent import executor as ex
+from agent import policy
 from agent import prompts
 from agent import sql_guard
+from agent.policy import Principal
 from agent.schema_index import SchemaIndex
 
 LlmFn = Callable[[list[dict[str, str]]], dict[str, Any]]
+
+# 单机场景（Streamlit / CLI / 评测）没有身份，共用同一个 scope；
+# 服务化（小程序）**必须**传 principal，否则多用户会命中彼此的缓存 —— 越权。
+LOCAL_SCOPE = "local"
 
 
 @dataclass
@@ -76,6 +82,7 @@ def _extract(raw: Any) -> tuple[str, str]:
 def answer(
     question: str,
     *,
+    principal: Principal | None = None,
     llm_fn: LlmFn | None = None,
     max_repair: int = 1,
     execute: bool = True,
@@ -90,10 +97,12 @@ def answer(
     call_llm = llm_fn or _default_llm_fn
     usage_before = llm_mod.USAGE.summary()
     res = Nl2SqlResult(question=question)
+    # 缓存隔离维度：带身份时按 角色 + 策略版本 隔离；单机场景退回 LOCAL_SCOPE
+    scope = policy.cache_scope(principal) if principal is not None else LOCAL_SCOPE
 
     # 0) 缓存命中：复用上次的 SQL，重新执行
     if use_cache and execute:
-        hit = cache_mod.cache().get(question, top_k)
+        hit = cache_mod.cache().get(question, top_k, scope=scope)
         if hit:
             try:
                 g_cached = sql_guard.validate(hit["sql"])
@@ -154,7 +163,7 @@ def answer(
 
         res.query, res.rows = qr.summary(), qr.as_dicts()
         if use_cache:
-            cache_mod.cache().put(question, g.sql, tables=res.tables, top_k=top_k)
+            cache_mod.cache().put(question, g.sql, tables=res.tables, top_k=top_k, scope=scope)
         if qr.row_count == 0 and attempt < max_repair:
             error = "查询返回 0 行：条件或枚举值可能不对（例如状态值、时间范围）"
             prev_sql = g.sql

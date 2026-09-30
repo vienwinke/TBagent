@@ -4,7 +4,7 @@
 设计取舍：**缓存 SQL，而不是缓存结果** —— 命中后仍然重新执行 SQL，
 所以数据永远是新鲜的（执行只要几毫秒），省掉的是最贵的那一次 LLM 生成。
 
-键 = sha1(归一化问题 + top_k + 数据库后端 + schema 指纹)，TTL 可配（默认 600s）。
+键 = sha1(归一化问题 + top_k + **权限维度** + 数据库后端 + schema 指纹)，TTL 可配（默认 600s）。
 落盘 data/cache/sql_cache.json（已 gitignore），原子写 + 命中计数，便于算命中率。
 """
 from __future__ import annotations
@@ -63,14 +63,16 @@ class SqlCache:
             self._load()
 
     # ---------- 存取 ----------
-    def _key(self, question: str, top_k: int | None) -> str:
-        raw = "%s|k=%s|%s|%s" % (_norm(question), top_k, SQL_DIALECT, _schema_fingerprint())
+    def _key(self, question: str, top_k: int | None, scope: str = "") -> str:
+        # ★ scope = 权限隔离维度（角色 + 策略版本，见 policy.cache_scope）。
+        #   缺了它，用户 A 缓存的 SQL 会被用户 B 直接复用 —— 多租户下的越权漏洞。
+        raw = "%s|k=%s|%s|%s|%s" % (_norm(question), top_k, scope, SQL_DIALECT, _schema_fingerprint())
         return hashlib.sha1(raw.encode("utf-8")).hexdigest()
 
-    def get(self, question: str, top_k: int | None = None) -> dict[str, Any] | None:
+    def get(self, question: str, top_k: int | None = None, *, scope: str = "") -> dict[str, Any] | None:
         if not self.enabled:
             return None
-        item = self._data.get(self._key(question, top_k))
+        item = self._data.get(self._key(question, top_k, scope))
         if not item:
             self.stats.misses += 1
             return None
@@ -83,10 +85,10 @@ class SqlCache:
         return item
 
     def put(self, question: str, sql: str, *, tables: list[str] | None = None,
-            top_k: int | None = None) -> None:
+            top_k: int | None = None, scope: str = "") -> None:
         if not self.enabled or not sql:
             return
-        self._data[self._key(question, top_k)] = {
+        self._data[self._key(question, top_k, scope)] = {
             "q": question.strip(), "sql": sql, "tables": tables or [],
             "ts": time.time(), "used": 0,
         }

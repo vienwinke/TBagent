@@ -371,15 +371,20 @@ def rewrite(sql: str, principal: Principal) -> RewrittenSql:
     )
 
 
-def cache_scope_key(question: str, top_k: int | None, principal: Principal) -> str:
-    """缓存键：带角色与策略版本，**不含 user_id**
+def cache_scope(principal: Principal) -> str:
+    """缓存的**权限隔离维度**：角色 + 策略版本（不含 user_id）
 
     为什么不含 user_id：缓存里存的是**重写前**的 SQL（纯 SQL 文本、不含任何用户数据），
     每次请求都重新 rewrite() 注入身份。因此同角色的用户共享同一份缓存是安全且正确的，
     还能保住命中率。
     ★ 不变式：缓存值只能是重写前 SQL；任何情况下都不得缓存重写后的 SQL。
     """
-    raw = "%s|%s|%s|%s" % ((question or "").strip().lower(), top_k or 0, principal.role, POLICY_VERSION)
+    return "%s|%s" % (principal.role, POLICY_VERSION)
+
+
+def cache_scope_key(question: str, top_k: int | None, principal: Principal) -> str:
+    """问题级缓存键（问题 + top_k + 权限维度），供需要自行建键的调用方使用"""
+    raw = "%s|%s|%s" % ((question or "").strip().lower(), top_k or 0, cache_scope(principal))
     return hashlib.sha1(raw.encode("utf-8")).hexdigest()
 
 

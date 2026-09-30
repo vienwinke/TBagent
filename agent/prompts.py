@@ -41,7 +41,7 @@ DOMAIN_RULES = """【业务规则（必须遵守）】
    - login_log.success TINYINT: 1=成功 0=失败，失败原因在 fail_reason（如 LOGIN_LOCKED）
 3. 金额字段 `task.reward`/`task_claim.reward`/`settlement.amount` 为 DECIMAL，聚合用 SUM()/AVG()。
 4. 时间字段为 DATETIME（Asia/Shanghai）。"最近 7 天"= `create_time >= DATE_SUB(CURDATE(), INTERVAL 7 DAY)`；
-   "今天"= `DATE(create_time) = CURDATE()`；按月用 `DATE_FORMAT(create_time, '%%Y-%%m')`。
+   "今天"= `DATE(create_time) = CURDATE()`；按月用 `DATE_FORMAT(create_time, '%Y-%m')`。
 5. 表关系：task.publisher_id→user.id；task_claim.task_id→task.id；task_claim.user_id→user.id；
    task_submission.claim_id→task_claim.id；review.claim_id→task_claim.id；review.from_user_id/to_user_id→user.id；
    settlement.claim_id→task_claim.id；report.reporter_id/handler_id→user.id；report.target_type/target_id 指向被举报对象；
