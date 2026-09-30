@@ -68,3 +68,26 @@ def test_nl2sql_answer_accepts_principal():
     params = inspect.signature(nl2sql.answer).parameters
     assert "principal" in params, "answer() 缺少 principal 参数"
     assert params["principal"].default is None
+
+
+def test_schema_slim_is_disabled_by_default_in_code():
+    """提交 26bc0b2 宣称"Schema 精简默认关闭"，但代码兜底曾是 18/36（与 .env 无关）：
+    任何没在 .env 里显式关掉的部署都会静默开启精简"""
+    import config as config_mod
+
+    src = inspect.getsource(config_mod)
+    assert '_env("SCHEMA_MAX_COLUMNS", "0")' in src
+    assert '_env("SCHEMA_DESC_MAX", "0")' in src
+    assert config_mod.SCHEMA_MAX_COLUMNS == 0
+    assert config_mod.SCHEMA_DESC_MAX == 0
+
+
+def test_docs_do_not_reference_missing_paths():
+    """文档曾指向不存在的 eval/ablation.py、data/faiss.index、data/chunks.json、docs/报告.md"""
+    root = Path(__file__).resolve().parents[1]
+    for name in ("README.md", "docs/方案.md"):
+        text = (root / name).read_text(encoding="utf-8")
+        assert "ablation.py" not in text, "%s 又指向了不存在的 ablation.py" % name
+        assert "faiss.index" not in text, "%s 又指向了不存在的 faiss.index" % name
+        assert "chunks.json" not in text, "%s 又指向了不存在的 chunks.json" % name
+        assert "docs/报告.md" not in text, "%s 又指向了不存在的 docs/报告.md" % name

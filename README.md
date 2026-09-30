@@ -65,11 +65,14 @@ streamlit run app.py                          # 打开 http://localhost:8501 提
 ## 目录
 
 ```
-agent/        router 意图路由 · schema_index Schema 检索 · nl2sql 生成+护栏+回环 · executor 只读执行 · chart 选图 · rag 知识库
-eval/         cases.yaml 60 条评估用例 · run_eval.py 跑分 · ablation.py 消融
+agent/        router 意图路由 · schema_index Schema 检索 · sql_guard 静态护栏 · executor 只读执行
+              nl2sql 生成+回环 · chart 选图 · rag/kb 知识库 · answer 转述 · cache 缓存
+              policy 行级隔离重写（待接线）· prompts_user 嵌入版提示词包（待接线）
+eval/         cases.yaml 60 条用例 · kb_cases.yaml 知识库用例 · run_eval.py 跑分（--ablation 消融 / --kb 知识库）
 sql/          readonly_user.sql 最小权限只读账号
-docs/         方案.md（完整方案）· prompts/ 提示词模板 · 报告.md
-data/         schema.json · faiss.index · chunks.json · cache/
+docs/         方案.md · 评估报告.md · 开发环境.md · 部署.md · 面试讲稿.md · 视频脚本.md · 计划.md
+              treatbord嵌入-技术栈重设计.md · treatbord嵌入-提示词包.md · treatbord嵌入-Java侧接入要点.md
+data/         schema.json · schema_index.json · snapshot.sqlite · knowledge/ · cache/
 ```
 
 ## 指标目标
@@ -95,7 +98,7 @@ data/         schema.json · faiss.index · chunks.json · cache/
 
 - [x] 项目骨架与方案（docs/方案.md）
 - [x] M0 骨架：config/llm（重试+token/成本）/executor（只读沙箱+脱敏+EXPLAIN 成本护栏）
-- [x] M1 Schema 抽取与检索（15 表/141 列含中文描述；Schema Top-5 召回 12/12 = 100%）
+- [x] M1 Schema 抽取与检索（15 张表中 14 张业务表 + 1 张系统表，共 141 列含中文描述；Schema Top-5 召回 12/12 = 100%）
 - [x] M2 NL2SQL + 三层护栏 + 回环修复（护栏单测 16/16 危险 SQL 全拦截；回环修复 5 类场景通过）
 - [x] M3 知识库 RAG + 三分类路由（**命中率 100% / 拒答率 100% / 引用覆盖 100%**）
 - [x] M4 自动图表 + Streamlit 界面（`agent/chart.py` 选图规则 + `app.py`，含成本面板与护栏提示）
