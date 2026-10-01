@@ -55,6 +55,24 @@ def test_usage_keeps_totals_and_per_model_breakdown():
     assert u.summary()["by_model"] == {LLM.model: 1, LLM.model_cheap: 1}
 
 
+def test_cached_input_is_priced_separately():
+    """命中前缀缓存的输入不能按全价计（provider 实际按缓存价计费）"""
+    u = llm.Usage()
+    u.add(LLM.model, 1000, 0, 1.0, cached=800)
+    expect = (200 / 1e6 * LLM.price_in) + (800 / 1e6 * LLM.cached_price_in(LLM.model))
+    assert abs(u.cost_yuan - expect) < 1e-12
+    assert u.cache_read_tokens == 800
+    assert u.summary()["cache_read_tokens"] == 800
+
+
+def test_cached_tokens_are_clamped_to_prompt_tokens():
+    """异常用量（缓存读数 > 输入量）不得产生负成本或离谱数字"""
+    u = llm.Usage()
+    u.add(LLM.model, 100, 0, 1.0, cached=500)
+    assert u.cache_read_tokens == 100
+    assert u.cost_yuan >= 0
+
+
 def test_summary_uses_cheap_tier(monkeypatch):
     seen = {}
 

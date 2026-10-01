@@ -55,6 +55,9 @@ class LLMConfig:
     # 未配置则退回主档单价（估算偏保守，不会低估成本）
     price_in_cheap: float = float(_env("LLM_PRICE_IN_CHEAP", "") or price_in)
     price_out_cheap: float = float(_env("LLM_PRICE_OUT_CHEAP", "") or price_out)
+    # 命中前缀缓存的输入单价：实测 provider 会缓存公共前缀（跨问题命中 75~95%），
+    # 缓存读取通常远低于正常输入价。留空 = 按全价计（**偏保守的上界**，不会低估）
+    price_in_cached: float = float(_env("LLM_PRICE_IN_CACHED", "") or price_in)
 
     def price_for(self, model: str | None) -> tuple[float, float]:
         """按模型返回 (输入单价, 输出单价)，单位：元/百万 token。
@@ -67,6 +70,10 @@ class LLMConfig:
         if model and model == self.model_cheap:
             return self.price_in_cheap, self.price_out_cheap
         return self.price_in, self.price_out
+
+    def cached_price_in(self, model: str | None) -> float:
+        """命中前缀缓存的输入单价（元/百万 token）。未配置时等于正常输入价。"""
+        return self.price_in_cached
 
     @property
     def configured(self) -> bool:

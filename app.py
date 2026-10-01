@@ -160,6 +160,7 @@ def handle(question: str) -> dict:
                 denied=r.denied, deny_reason=r.deny_reason,
                 elapsed_ms=int((time.time() - started) * 1000),
                 tokens=after["total_tokens"] - before.get("total_tokens", 0),
+                cache_tokens=after.get("cache_read_tokens", 0) - before.get("cache_read_tokens", 0),
                 cost=after["cost_yuan"] - before.get("cost_yuan", 0.0))
     if r.ok:
         item["answer_text"] = answer_mod.summarize(question, r.query.get("columns", []),
@@ -212,6 +213,8 @@ def render_item(item: dict) -> None:
                 "成本 ¥%.5f" % item.get("cost", 0.0), "尝试 %d 次" % item.get("attempts", 0)]
         if item.get("repaired"):
             bits.append("✅ 回环修复成功")
+        if item.get("cache_tokens"):
+            bits.append("前缀缓存命中 %d tokens" % item["cache_tokens"])
         if q.get("masked_columns"):
             bits.append("🔒 已脱敏：%s" % ", ".join(q["masked_columns"]))
         if q.get("truncated"):

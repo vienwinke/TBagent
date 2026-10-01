@@ -41,10 +41,12 @@ class Usage:
     calls: int = 0
     prompt_tokens: int = 0
     completion_tokens: int = 0
+    cache_read_tokens: int = 0        # 命中 provider 前缀缓存的输入 token（实测跨问题 75~95%）
     retries: int = 0
     seconds: float = 0.0
     _by_model: dict[str, int] = field(default_factory=dict)
-    _tokens_by_model: dict[str, list[int]] = field(default_factory=dict)   # model -> [prompt, completion]
+    # model -> [prompt, completion, cached]
+    _tokens_by_model: dict[str, list[int]] = field(default_factory=dict)
 
     @property
     def total_tokens(self) -> int:
@@ -52,32 +54,42 @@ class Usage:
 
     @property
     def cost_yuan(self) -> float:
-        """按模型分别计价。
+        """按模型分别计价，并把"命中前缀缓存的输入"按缓存单价计。
 
-        原先用单一单价乘总 token：项目有主档/便宜档两个模型时会把便宜档的调用按主档计价，
-        账目偏高且无法解释（成本面板、审计金额都会被带偏）。
+        原先用单一单价乘总 token，有两个偏差：
+        · 主档/便宜档混用时，便宜档被按主档计价；
+        · 缓存命中的输入被按全价计（provider 实际按缓存价计费，通常远低于正常输入价）。
+        未配置 LLM_PRICE_IN_CACHED 时缓存价退回正常输入价 —— 估算偏保守、不会低估。
         """
         total = 0.0
-        for model, (prompt, completion) in self._tokens_by_model.items():
+        for model, (prompt, completion, cached) in self._tokens_by_model.items():
             pin, pout = LLM.price_for(model)
-            total += prompt / 1e6 * pin + completion / 1e6 * pout
+            cached = min(cached, prompt)
+            total += (prompt - cached) / 1e6 * pin
+            total += cached / 1e6 * LLM.cached_price_in(model)
+            total += completion / 1e6 * pout
         return total
 
-    def add(self, model: str, prompt: int, completion: int, seconds: float) -> None:
+    def add(self, model: str, prompt: int, completion: int, seconds: float,
+            *, cached: int = 0) -> None:
+        cached = min(max(0, cached), max(0, prompt))     # 缓存读不可能超过输入量
         self.calls += 1
         self.prompt_tokens += prompt
         self.completion_tokens += completion
+        self.cache_read_tokens += cached
         self.seconds += seconds
         self._by_model[model] = self._by_model.get(model, 0) + 1
-        slot = self._tokens_by_model.setdefault(model, [0, 0])
+        slot = self._tokens_by_model.setdefault(model, [0, 0, 0])
         slot[0] += prompt
         slot[1] += completion
+        slot[2] += cached
 
     def summary(self) -> dict[str, Any]:
         return {
             "calls": self.calls,
             "prompt_tokens": self.prompt_tokens,
             "completion_tokens": self.completion_tokens,
+            "cache_read_tokens": self.cache_read_tokens,
             "total_tokens": self.total_tokens,
             "retries": self.retries,
             "seconds": round(self.seconds, 2),
@@ -146,7 +158,12 @@ def chat(
             resp = client().chat.completions.create(**kwargs)
             latency = time.time() - started
             if resp.usage:
-                USAGE.add(use_model, resp.usage.prompt_tokens or 0, resp.usage.completion_tokens or 0, latency)
+                # provider 会返回命中前缀缓存的 token 数（OpenAI 兼容字段）；
+                # 实测跨问题命中 75~95%，必须单独记账，否则成本估算会把缓存读按全价计。
+                details = getattr(resp.usage, "prompt_tokens_details", None)
+                cached = int(getattr(details, "cached_tokens", 0) or 0)
+                USAGE.add(use_model, resp.usage.prompt_tokens or 0,
+                          resp.usage.completion_tokens or 0, latency, cached=cached)
             logger.debug("[llm] {} model={} {}s tokens={}", tag or "chat", use_model, latency,
                          getattr(resp.usage, "total_tokens", "-"))
             content = (resp.choices[0].message.content or "").strip()
