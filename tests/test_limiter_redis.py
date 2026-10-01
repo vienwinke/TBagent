@@ -161,3 +161,57 @@ def test_sidecar_works_with_redis_backend(monkeypatch):
     finally:
         sidecar.LIMITER.reset()
         sidecar.LIMITER = limiter_mod.make_limiter()          # 还原默认（内存）
+
+
+# ------------------------------------------------------------------ jti 黑名单（Redis，即时降权）
+@requires_redis
+def test_redis_denylist_is_shared_across_replicas():
+    """treatbord（Java）写入黑名单，边车必须立刻看到 —— 否则降权还有 5 分钟窗口"""
+    from sidecar.denylist import RedisDenylist
+
+    a, b = RedisDenylist(REDIS_URL), RedisDenylist(REDIS_URL)
+    jti = "test-jti-%s" % uuid.uuid4().hex[:8]
+    assert b.is_revoked(jti) is False
+    a.revoke(jti, ttl_sec=60)
+    assert b.is_revoked(jti) is True, "跨副本必须共享"
+    a.reset()
+    assert b.is_revoked(jti) is False
+
+
+@requires_redis
+def test_revoked_token_rejected_end_to_end(monkeypatch):
+    """真实 HTTP：同一个 token，吊销前 200、吊销后 401、移出黑名单后又能用"""
+    import time
+
+    from agent.pipeline import Deps
+    from sidecar import auth as auth_mod
+    from sidecar import denylist as denylist_mod
+
+    secret = "denylist-secret"
+    monkeypatch.setenv("SIDECAR_JWT_SECRET", secret)
+    monkeypatch.delenv("SIDECAR_DEV_PRINCIPAL", raising=False)
+    monkeypatch.setenv("SIDECAR_REDIS_URL", REDIS_URL)
+    monkeypatch.setattr(sidecar, "DENYLIST", denylist_mod.RedisDenylist(REDIS_URL))
+    monkeypatch.setattr(sidecar, "DEPS", Deps(
+        nl2sql_llm=lambda m: {"sql": "SELECT COUNT(*) AS c FROM task WHERE deleted = 0",
+                              "reason": "t", "tables": ["task"]},
+        summary_llm=lambda m: "共 8 个任务。"))
+    sidecar.LIMITER.reset()
+    sidecar.STATS.reset()
+
+    now = time.time()
+    token = auth_mod.sign({"sub": "7", "role": "USER", "jti": "e2e-jti-1",
+                           "iat": now, "exp": now + 120, "aud": "ai-sidecar"}, secret)
+    body = {"session_id": "s-jti", "question": "待接取的任务有几个？"}
+    client = TestClient(sidecar.app)
+    try:
+        assert client.post("/v1/ai/chat", json=body,
+                           headers={"Authorization": "Bearer " + token}).status_code == 200
+
+        sidecar.DENYLIST.revoke("e2e-jti-1", ttl_sec=60)        # 模拟 treatbord 降权
+        r = client.post("/v1/ai/chat", json=body,
+                        headers={"Authorization": "Bearer " + token})
+        assert r.status_code == 401 and r.json()["code"] == "UNAUTHENTICATED"
+    finally:
+        sidecar.DENYLIST.reset()
+        sidecar.LIMITER.reset()

@@ -21,7 +21,7 @@ import hashlib
 import hmac
 import json
 import time
-from typing import Any
+from typing import Any, Callable
 
 from agent.policy import ROLES, Principal
 
@@ -63,8 +63,13 @@ def sign(payload: dict[str, Any], secret: str) -> str:
 
 def verify(token: str, *, secret: str, audience: str = AUDIENCE,
            max_lifetime: int = MAX_LIFETIME_SEC, leeway: int = DEFAULT_LEEWAY_SEC,
+           is_revoked: Callable[[str | None], bool] | None = None,
            now: float | None = None) -> Principal:
-    """校验内部 JWT 并返回 Principal；任何不合规都抛 AuthError。"""
+    """校验内部 JWT 并返回 Principal；任何不合规都抛 AuthError。
+
+    `is_revoked`：jti 黑名单查询（见 sidecar/denylist.py）。契约 §2.2 说明
+    "降权后旧 token 最长 5 分钟内仍有效 → 要即时生效就把 jti 放 Redis 黑名单"。
+    """
     if not secret:
         raise AuthError("边车未配置 JWT 密钥", code="AUTH_NOT_CONFIGURED")
     if not token or token.count(".") != 2:
@@ -111,6 +116,9 @@ def verify(token: str, *, secret: str, audience: str = AUDIENCE,
             raise AuthError("iat 在未来（时钟或伪造）")
         if float(exp) - float(iat) > max_lifetime + leeway:
             raise AuthError("token 有效期超过 %d 秒（契约要求 exp ≤ 5 分钟）" % max_lifetime)
+
+    if is_revoked is not None and is_revoked(payload.get("jti")):
+        raise AuthError("token 已吊销（jti 在黑名单中）")
 
     sub = payload.get("sub")
     if not isinstance(sub, str) or not sub.isdigit():

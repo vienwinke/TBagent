@@ -38,6 +38,7 @@ from config import LLM
 from agent import audit as audit_mod
 from agent import pipeline, policy
 from sidecar import auth
+from sidecar.denylist import make_denylist
 from sidecar.limiter import make_limiter
 from agent.pipeline import Deps
 from agent.policy import Principal
@@ -87,6 +88,7 @@ def _env_int(name: str, default: int) -> int:
 
 
 LIMITER = make_limiter()
+DENYLIST = make_denylist()
 
 STATS = _Stats()
 
@@ -120,7 +122,8 @@ def principal_from_request(request: Request) -> Principal:
     if secret:
         if os.getenv("SIDECAR_DEV_PRINCIPAL", "").strip():
             logger.warning("[sidecar] 同时配置了 JWT 密钥与开发身份：以 JWT 为准，开发身份被忽略")
-        return auth.principal_from_bearer(request.headers.get("authorization"), secret=secret)
+        return auth.principal_from_bearer(request.headers.get("authorization"), secret=secret,
+                                          is_revoked=DENYLIST.is_revoked)
 
     dev = os.getenv("SIDECAR_DEV_PRINCIPAL", "").strip()
     if dev:
@@ -286,7 +289,8 @@ def readyz() -> dict[str, Any]:
             "db": db,
             "policy_version": policy.POLICY_VERSION,
             "auth_configured": auth_configured(),
-            "limiter": LIMITER.backend(),          # memory（单副本）或 redis（多副本共享）
+            "limiter": LIMITER.backend(),
+            "denylist": DENYLIST.backend(),          # memory（单副本）或 redis（多副本共享）
             "audit_enabled": audit_mod.enabled(),
             "audit": audit_mod.stats(),
             "dev_principal": bool(os.getenv("SIDECAR_DEV_PRINCIPAL", "").strip())}

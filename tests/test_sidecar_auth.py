@@ -199,3 +199,50 @@ def test_readyz_reports_auth_configured(monkeypatch):
     monkeypatch.setenv("SIDECAR_JWT_SECRET", SECRET)
     body = TestClient(sidecar.app).get("/readyz").json()
     assert body["auth_configured"] is True
+
+
+# ------------------------------------------------------------------ jti 黑名单（即时降权）
+def test_revoked_jti_is_rejected():
+    """契约 §2.2：降权/登出后旧 token 要**即时**失效，不能等 5 分钟过期"""
+    token = make_token()
+    assert auth.verify(token, secret=SECRET).user_id == 7                  # 未吊销：可用
+    revoked = {"j-1"}          # make_token() 里的 jti 就是 "j-1"
+    with pytest.raises(auth.AuthError, match="已吊销"):
+        auth.verify(token, secret=SECRET, is_revoked=lambda jti: jti in revoked)
+
+
+def test_unknown_jti_passes():
+    assert auth.verify(make_token(), secret=SECRET,
+                       is_revoked=lambda jti: False).user_id == 7
+
+
+def test_missing_jti_never_revoked():
+    """没有 jti 的 token 不该因为"查不到"被拒（黑名单只对明确的 jti 生效）"""
+    payload = {"sub": "7", "role": "USER", "aud": "ai-sidecar",
+               "iat": time.time(), "exp": time.time() + 60}
+    token = auth.sign(payload, SECRET)
+    assert auth.verify(token, secret=SECRET, is_revoked=lambda jti: jti is not None).user_id == 7
+
+
+# ------------------------------------------------------------------ 黑名单后端
+def test_memory_denylist_ttl():
+    from sidecar.denylist import MemoryDenylist
+
+    dl = MemoryDenylist()
+    assert dl.is_revoked("j1") is False
+    dl.revoke("j1", ttl_sec=60)
+    assert dl.is_revoked("j1") is True
+    dl.revoke("j2", ttl_sec=1)
+    dl._revoked["j2"] = time.monotonic() - 1        # 手动过期
+    assert dl.is_revoked("j2") is False
+    dl.reset()
+    assert dl.is_revoked("j1") is False
+
+
+def test_make_denylist_falls_back_without_redis(monkeypatch):
+    from sidecar import denylist as dl_mod
+
+    monkeypatch.delenv("SIDECAR_REDIS_URL", raising=False)
+    assert dl_mod.make_denylist().backend() == "memory"
+    monkeypatch.setenv("SIDECAR_REDIS_URL", "redis://127.0.0.1:6399/0")
+    assert dl_mod.make_denylist().backend() == "memory", "连不上必须降级而不是崩"
