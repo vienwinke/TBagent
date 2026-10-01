@@ -25,6 +25,15 @@ class LLMError(RuntimeError):
     """模型调用失败（已重试仍失败，或配置缺失）"""
 
 
+class EmptyResponseError(LLMError):
+    """provider 偶发「HTTP 200 + 空内容」。
+
+    实测：60 题全量评估里有一条 `time-12` 拿到的原始输出是空字符串，
+    被当成"模型输出不合法"烧掉了回环次数，最后整题失败。
+    空内容属于瞬时故障，应该在 chat() 内部退避重试，而不是污染上层链路。
+    """
+
+
 @dataclass
 class Usage:
     """token 与成本累计"""
@@ -81,6 +90,8 @@ def client() -> OpenAI:
 
 
 def _retryable(exc: BaseException) -> bool:
+    if isinstance(exc, EmptyResponseError):
+        return True                      # 空响应是瞬时故障，必须重试
     name = type(exc).__name__
     if name in RETRYABLE_NAMES:
         return True
@@ -125,7 +136,11 @@ def chat(
                 USAGE.add(use_model, resp.usage.prompt_tokens or 0, resp.usage.completion_tokens or 0, latency)
             logger.debug("[llm] {} model={} {}s tokens={}", tag or "chat", use_model, latency,
                          getattr(resp.usage, "total_tokens", "-"))
-            return (resp.choices[0].message.content or "").strip()
+            content = (resp.choices[0].message.content or "").strip()
+            if not content:
+                # 见 EmptyResponseError：空内容当瞬时故障重试（否则上层会误判为"输出不合法"）
+                raise EmptyResponseError("模型返回空内容")
+            return content
         except BaseException as exc:  # noqa: BLE001
             # httpx/urllib3 对请求头做 ASCII 编码，密钥含中文时报的错很难懂 → 直接给出可操作提示
             if isinstance(exc, UnicodeEncodeError):
@@ -149,6 +164,8 @@ _JSON_RE = re.compile(r"\{.*\}", re.S)
 def chat_json(messages: list[dict[str, str]], **kwargs: Any) -> dict[str, Any]:
     """要求模型返回 JSON 并解析；解析失败时抛出带原始输出的异常，便于诊断"""
     raw = chat(messages, json_mode=True, **kwargs)
+    if not raw:
+        raise LLMError("模型返回空内容（json_mode）")
     try:
         return json.loads(raw)
     except json.JSONDecodeError:
@@ -158,7 +175,9 @@ def chat_json(messages: list[dict[str, str]], **kwargs: Any) -> dict[str, Any]:
                 return json.loads(match.group(0))
             except json.JSONDecodeError:
                 pass
-        raise LLMError("模型未返回合法 JSON，原始输出前 300 字：%s" % raw[:300])
+        # 区分「被截断」与「夹杂多余文本」：前者要精简输出，后者要提示只输出 JSON
+        hint = "" if raw.rstrip().endswith("}") else "（JSON 未闭合，疑似被 max_tokens 截断）"
+        raise LLMError("模型未返回合法 JSON%s，原始输出前 300 字：%s" % (hint, raw[:300]))
 
 
 def stats() -> dict[str, Any]:
