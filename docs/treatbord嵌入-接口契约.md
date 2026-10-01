@@ -227,6 +227,7 @@ pipeline.error_event(msg)  # 失败 → 契约 §2.4 的错误码
 | → 回环 `kind` | `guard_rejected` / `column_denied` / `cte_name_conflict` / `sql_error` / `empty_result` / `too_expensive` / `timeout`；`DENY_PLATFORM` 与 `DENY_INTERNAL` 映射为 `None`（不回环，直接拒答） |
 | 缓存不变式 | **只存重写前 SQL**；命中后必须重新 `rewrite()` + 重新执行；键含 `role + POLICY_VERSION`，**不含 user_id**（同角色共享是安全的） |
 | `{{ME}}` 占位符 | 模型可写 `{{ME}}`；重写层在解析前替换为整数 user_id（来自 JWT，无注入面） |
+| 建表脚本 | ✅ `sql/ai_tables.sql`（5 张 `ai_*` 表，幂等可重跑）。⚠️ 执行需要**可写连接**：当前边车只有只读账号，建表与落库必须用另开的账号，且审计表**只给 INSERT/SELECT**（只增不改，脚本末尾附授权模板与自检方法） |
 | 审计行 | `trace_id, user_id, session_id, question, route, scope, detected_tables, generated_sql, rewritten_sql, policy_version, verdict, deny_reason, row_count, truncated, masked_columns, latency_ms, prompt_tokens, completion_tokens, cost_yuan, cache_hit, repaired, model, created_at` |
 
 ## 5. 验收门禁
