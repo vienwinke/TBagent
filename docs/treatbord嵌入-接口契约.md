@@ -13,9 +13,10 @@
 | 传输 | HTTPS（treatbord → 边车走内网）；小程序 → treatbord 走已备案域名 |
 | 鉴权 | `Authorization: Bearer <内部JWT>`，HS256（升级路径 RS256） |
 | 追踪 | 所有请求带 `X-Trace-Id`，边车原样写进审计表 |
-| 超时预算 | 端到端 **8s** 硬超时 · 单次 LLM **12s** · SQL **3s**（`SQL_TIMEOUT_MS`） |
-| 幂等 | `client_msg_id` 进 Redis `SETNX`（TTL 10min）；重发返回同一结果，不重复计费 |
-| 并发 | 同 `session_id` 串行；全局并发上限保护数据库 |
+| 超时预算 | 端到端 **8s** 硬超时（`SIDECAR_TIMEOUT_MS`）· 单次 LLM **12s** · SQL **3s**（`SQL_TIMEOUT_MS`）<br>✅ 已实现：超预算给 **error + done.timeout** 的诚实降级（不是 500）；单次模型调用也按预算设上限（实测有 25s 卡顿，不设上限会穿透） |
+| 追踪 | `X-Trace-Id` 由 treatbord 生成，边车**原样沿用**（不自己另生成） ✅ 已实现 |
+| 幂等 | `client_msg_id` 幂等（TTL 10min）；重发返回**逐字节相同**的结果，不重复计费<br>✅ 已实现（**进程内**）；多副本必须换 Redis —— 否则配额翻倍、幂等失效 |
+| 并发 | 同 `session_id` 串行 ✅ · 全局并发上限 ✅（`SIDECAR_MAX_CONCURRENCY`，超限 **429 QUOTA_EXCEEDED**，不排队） |
 | 版本 | `policy_version=pol-2026.11-02` · `prompt_version=p2026.11-01`，两者随响应返回 |
 
 ## 1. L1 · 小程序 ↔ treatbord

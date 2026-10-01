@@ -175,6 +175,7 @@ def chat(
     max_tokens: int | None = 2048,
     json_mode: bool = False,
     tag: str = "",
+    timeout: float | None = None,
 ) -> str:
     """一次对话调用（含重试与用量统计），返回模型文本"""
     use_model = model or LLM.model
@@ -183,6 +184,10 @@ def chat(
         kwargs["max_tokens"] = max_tokens
     if json_mode:
         kwargs["response_format"] = {"type": "json_object"}
+    if timeout:
+        # 每请求超时：边车要按端到端预算（契约 8s）给单次调用设上限，
+        # 否则模型侧一次 25s 的卡顿会直接穿透预算（实测出现过）
+        kwargs["timeout"] = timeout
 
     if not LLM.configured:
         raise LLMError("未配置 LLM_API_KEY（或 DEEPSEEK_API_KEY）：请在 .env / Secrets 中填写后再调用模型")

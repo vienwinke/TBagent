@@ -141,6 +141,7 @@ def test_missing_secret_is_not_configured():
 @pytest.fixture
 def client(monkeypatch):
     sidecar.STATS.reset()
+    sidecar.LIMITER.reset()
     monkeypatch.delenv("SIDECAR_DEV_PRINCIPAL", raising=False)
     monkeypatch.setenv("SIDECAR_JWT_SECRET", SECRET)
     monkeypatch.setattr(sidecar, "DEPS", DEPS)

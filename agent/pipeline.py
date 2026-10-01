@@ -75,14 +75,21 @@ def _done(started: float, before: dict[str, Any], *, route: str | None = None,
 
 
 def error_event(message: str | None) -> Event:
-    """把失败翻译成契约里的错误码（契约 §2.4：可重试性由前端决定）"""
+    """把失败翻译成契约里的错误码（契约 §2.4：可重试性由前端决定）。
+
+    顺序有讲究：**先判模型侧**再判超时 —— 否则"模型调用超时"（APITimeoutError）会被
+    当成 SQL 执行超时（实测踩到：错误码发成 SQL_TIMEOUT，前端会去重试 SQL，方向就错了）。
+    """
     text = (message or "").lower()
-    if "timeout" in text or "超时" in text:
-        return "error", {"code": "SQL_TIMEOUT", "message": message or "执行超时", "retryable": True}
-    if "模型" in (message or "") or "llm" in text or "429" in text:
-        return "error", {"code": "LLM_UNAVAILABLE", "message": message or "模型不可用",
+    raw = message or ""
+    model_side = ("生成阶段" in raw or "模型" in raw or "llm" in text
+                  or "ratelimit" in text or "429" in text or "apitimeout" in text)
+    if model_side:
+        return "error", {"code": "LLM_UNAVAILABLE", "message": raw or "模型不可用",
                          "retryable": True}
-    return "error", {"code": "INTERNAL", "message": message or "未知错误", "retryable": True}
+    if "timeout" in text or "超时" in text:
+        return "error", {"code": "SQL_TIMEOUT", "message": raw or "执行超时", "retryable": True}
+    return "error", {"code": "INTERNAL", "message": raw or "未知错误", "retryable": True}
 
 
 def _guard_events(result: nl2sql.Nl2SqlResult) -> Iterator[Event]:

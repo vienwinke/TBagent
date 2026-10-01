@@ -30,6 +30,7 @@ BODY = {"session_id": "s_1", "question": "待接取的任务有几个？", "clie
 @pytest.fixture(autouse=True)
 def _clean(monkeypatch):
     sidecar.STATS.reset()
+    sidecar.LIMITER.reset()
     monkeypatch.delenv("SIDECAR_DEV_PRINCIPAL", raising=False)
     monkeypatch.setattr(sidecar, "DEPS", DEPS)
     yield

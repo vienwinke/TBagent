@@ -202,3 +202,16 @@ def test_pipeline_keeps_raw_sql_for_privileged():
     evs = run("select * from task limit 5", ADMIN, deps=NL2SQL_DEPS, use_cache=False)
     assert payload(evs, "route")[0]["route"] == router.DATA
     assert payload(evs, "sql")[0]["sql"]
+
+
+# ------------------------------------------------------------------ 错误码映射
+def test_error_event_prefers_model_side_over_timeout():
+    """模型调用超时必须报 LLM_UNAVAILABLE：报成 SQL_TIMEOUT 会让前端去重试 SQL"""
+    ev, data = pipeline.error_event("生成阶段失败: 模型调用失败（尝试 4 次）: APITimeoutError: Request timed out.")
+    assert ev == "error" and data["code"] == "LLM_UNAVAILABLE"
+
+    ev2, data2 = pipeline.error_event("执行失败: SQL 执行超时（3000ms）")
+    assert data2["code"] == "SQL_TIMEOUT"
+
+    _, data3 = pipeline.error_event("策略拒绝[DENY_GUARD]: 写操作")
+    assert data3["code"] == "INTERNAL"

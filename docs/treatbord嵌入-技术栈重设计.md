@@ -243,7 +243,7 @@ ai_prompt_version(name VARCHAR(32), version VARCHAR(16), content MEDIUMTEXT,
 |---|---|---|---|
 | **P0 拆服务** | ✅ **已完成**（2026-10-01）：`agent/pipeline.py` 事件流 + 可注入 Deps + app.py 改为适配器；`sidecar/app.py` FastAPI + SSE + `/healthz` `/readyz` `/metrics`。**鉴权未做 → 边车默认 503 fail-closed**（属 P1） | curl 能拿到流式答案，功能与 Streamlit 等价 | 6h ✅ |
 | **P1 身份 + 行级隔离** | ✅ **已完成**（2026-10-01）：内部 JWT 校验（HS256，算法锁定）· `agent/policy.py` · 唯一出口改造 · 缓存键带权限维度 · USER 关闭裸 SQL 入口 | 越权用例集 54/54 拦截率 100%、泄漏 0；鉴权冒烟：合法 200 / 伪造·过期·缺失 401 / 未配密钥 503 | 10h ✅ |
-| **P2 审计 + 限流** | `ai_*` 表；Redis 限流/配额/幂等；trace_id 贯穿；成本按用户归集 | 任意问题可按 trace_id 还原 SQL 与结果规模 | 6h |
+| **P2 审计 + 限流** | ◐ **进程内部分已完成**（2026-10-01）：trace_id 贯穿（`X-Trace-Id` 透传）· 幂等（进程内，逐字节重放）· 同 session 串行 · 全局并发上限 429 · 运行时预算与诚实降级。**未做**：`ai_*` 四表落库（需可写连接）· Redis（跨副本限流/幂等/jti 黑名单）· 成本按用户归集 | 任意问题可按 trace_id 还原 SQL 与结果规模 | 6h（余 ~4h） |
 | **P3 多轮** | 会话装载 + 指代消解改写；追问建议 | "那他呢/再按周拆"类追问可用 | 6h |
 | **P4 角色化与运营版** | ADMIN 分支（含 `audit_log`/`login_log`）；SQL 面板；指标看板 | 运营能看 SQL 与全库指标 | 6h |
 | **P5 上线加固** | 灰度、降级、压测、告警 | P95 ≤ 3s，错误率 < 1% | 6h |
