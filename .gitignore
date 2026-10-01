@@ -1,4 +1,4 @@
-﻿# 密钥（绝不入仓）
+# 密钥（绝不入仓）
 .env
 .env.local
 
@@ -27,3 +27,6 @@ data/schema_index.json
 # IDE 本地配置
 .idea/
 .vscode/
+
+# 架构图一次性校验产物（截图 / 对照页 / 回执）——由 archify visual-check 重新生成
+docs/*.visual-check.*

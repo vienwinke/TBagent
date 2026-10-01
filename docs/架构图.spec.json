@@ -1,0 +1,189 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "数据问答 Agent（NL2SQL + RAG）· 当前实现架构",
+    "quality_profile": "showcase",
+    "repository": {
+      "url": "https://github.com/vienwinke/TBagent",
+      "revision": "7a3c2ad3c5de79d6dae12d49dc67d009421f6123"
+    },
+    "views": [
+      {
+        "id": "data-path",
+        "label": "数据问答主链路",
+        "focus": ["user", "ui", "router", "nl2sql", "policy", "executor", "mysql"],
+        "note": "问句经路由进入 NL2SQL，生成的所有 SQL 都必须穿过 policy 唯一出口"
+      },
+      {
+        "id": "knowledge-path",
+        "label": "知识库分支",
+        "focus": ["user", "ui", "router", "rag"],
+        "note": "知识类问题走 BM25 检索，回答带引用可核查"
+      },
+      {
+        "id": "guardrails",
+        "label": "三层护栏与唯一出口",
+        "focus": ["nl2sql", "schema_index", "policy", "executor", "mysql"],
+        "note": "静态校验、只读沙箱、成本阈值；缓存只存重写前 SQL"
+      }
+    ]
+  },
+  "components": [
+    {
+      "id": "user",
+      "type": "external",
+      "label": "用户",
+      "sublabel": "浏览器 / 小程序（规划中）",
+      "pos": [40, 400],
+      "size": [130, 64]
+    },
+    {
+      "id": "ui",
+      "type": "frontend",
+      "label": "Streamlit 界面",
+      "sublabel": "app.py",
+      "sources": [{ "path": "app.py", "line": 151 }],
+      "pos": [230, 400],
+      "size": [160, 68]
+    },
+    {
+      "id": "router",
+      "type": "backend",
+      "label": "意图路由",
+      "sublabel": "agent/router.py",
+      "tag": "chat / knowledge / data",
+      "sources": [{ "path": "agent/router.py", "line": 49 }],
+      "pos": [450, 400],
+      "size": [140, 64]
+    },
+    {
+      "id": "llm",
+      "type": "external",
+      "label": "LLM Provider",
+      "sublabel": "OpenAI 兼容 · 双档位",
+      "tag": "temperature=0",
+      "sources": [{ "path": "llm.py" }],
+      "pos": [700, 150],
+      "size": [190, 62]
+    },
+    {
+      "id": "nl2sql",
+      "type": "backend",
+      "label": "NL2SQL 生成 + 回环修复",
+      "sublabel": "agent/nl2sql.py",
+      "tag": "失败回灌重试 ×1",
+      "sources": [{ "path": "agent/nl2sql.py", "line": 113 }],
+      "pos": [700, 400],
+      "size": [190, 68]
+    },
+    {
+      "id": "schema_index",
+      "type": "backend",
+      "label": "Schema 检索",
+      "sublabel": "agent/schema_index.py",
+      "tag": "Top-K 表注入",
+      "sources": [{ "path": "agent/schema_index.py", "line": 78 }],
+      "pos": [700, 640],
+      "size": [190, 62]
+    },
+    {
+      "id": "policy",
+      "type": "security",
+      "label": "行级隔离重写",
+      "sublabel": "agent/policy.py · 唯一出口",
+      "tag": "① sqlglot 静态护栏",
+      "sources": [{ "path": "agent/policy.py", "line": 299 }],
+      "pos": [1000, 400],
+      "size": [180, 72]
+    },
+    {
+      "id": "executor",
+      "type": "backend",
+      "label": "只读执行",
+      "sublabel": "agent/executor.py",
+      "tag": "② 只读沙箱 ③ EXPLAIN 限额",
+      "sources": [{ "path": "agent/executor.py", "line": 202 }],
+      "pos": [1290, 400],
+      "size": [170, 68]
+    },
+    {
+      "id": "mysql",
+      "type": "database",
+      "label": "MySQL treatbord",
+      "sublabel": "14 张业务表 · 只读账号",
+      "sources": [{ "path": "sql/readonly_user.sql" }],
+      "pos": [1570, 400],
+      "size": [170, 68]
+    },
+    {
+      "id": "rag",
+      "type": "backend",
+      "label": "知识库 RAG",
+      "sublabel": "agent/rag.py · kb.py",
+      "tag": "BM25 + 引用校验",
+      "sources": [{ "path": "agent/rag.py", "line": 80 }],
+      "pos": [450, 640],
+      "size": [140, 62]
+    },
+    {
+      "id": "answer",
+      "type": "backend",
+      "label": "转述与选图",
+      "sublabel": "agent/answer.py · chart.py",
+      "tag": "答案 + 表格 + 图 + 成本",
+      "sources": [{ "path": "agent/answer.py", "line": 20 }, { "path": "agent/chart.py", "line": 79 }],
+      "pos": [1290, 640],
+      "size": [170, 62]
+    }
+  ],
+  "boundaries": [
+    {
+      "kind": "security-group",
+      "label": "★ 唯一出口 + 只读沙箱（三层护栏）",
+      "wraps": ["policy", "executor"]
+    }
+  ],
+  "connections": [
+    { "id": "user-to-ui", "from": "user", "to": "ui", "label": "提问", "variant": "emphasis" },
+    { "id": "ui-to-router", "from": "ui", "to": "router" },
+    { "id": "router-to-nl2sql", "from": "router", "to": "nl2sql", "label": "data 分支" },
+    { "id": "router-to-rag", "from": "router", "to": "rag", "label": "knowledge 分支", "labelAt": [520, 540] },
+    { "id": "llm-to-nl2sql", "from": "llm", "to": "nl2sql", "label": "双档位模型调用", "labelAt": [795, 300] },
+    { "id": "schema-to-nl2sql", "from": "schema_index", "to": "nl2sql", "label": "注入 Top-K 表" },
+    { "id": "nl2sql-to-policy", "from": "nl2sql", "to": "policy", "label": "唯一出口重写", "variant": "emphasis" },
+    { "id": "policy-to-executor", "from": "policy", "to": "executor", "label": "已重写 SQL" },
+    { "id": "executor-to-mysql", "from": "executor", "to": "mysql", "label": "只读查询" },
+    { "id": "executor-to-answer", "from": "executor", "to": "answer", "label": "结果集", "labelAt": [1375, 560] }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "问答主链路",
+      "items": [
+        "Streamlit 单进程编排：问句 → 路由 → 分支 → 输出",
+        "两条分支的结果都回到界面：数据分支出表 + 图 + 成本，知识分支出引用",
+        "问题→SQL 缓存键含 role + 策略版本，且只存重写前 SQL"
+      ]
+    },
+    {
+      "dot": "emerald",
+      "title": "三层护栏（已验收）",
+      "items": [
+        "① sqlglot：仅 SELECT/WITH、表白名单、禁多语句、强制 LIMIT",
+        "② 只读沙箱：只读账号 + 会话 READ ONLY + SQL 3s 超时",
+        "③ EXPLAIN 扫描行数阈值；派生表替换保证行级隔离",
+        "pytest 170 passed · 越权用例 41/41 · 拦截率 100% · 泄漏 0"
+      ]
+    },
+    {
+      "dot": "amber",
+      "title": "待建（契约冻结 v1，未开工）",
+      "items": [
+        "P0 agent/pipeline.py 编排层 + FastAPI 边车 + SSE",
+        "P1 HTTP 层 JWT 入口；P2 ai_* 四表 + Redis 幂等限流",
+        "P3 多轮指代消解 · P4 ADMIN 运营版 · P5 上线加固"
+      ]
+    }
+  ]
+}

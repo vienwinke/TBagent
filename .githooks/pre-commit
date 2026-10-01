@@ -1,0 +1,12 @@
+#!/bin/sh
+# 提交前密钥门禁：只扫密钥（快），命中即阻断本次提交。
+#
+# 为什么需要它：scripts/prepublish_check.py 从 a4215c7 就存在，却从未被任何流程调用，
+# 结果 26bc0b2 把一把真实密钥写进了 .env.example 并推上了远端历史。
+# 门禁只有挂在流程上才算门禁。
+#
+# 启用（每个克隆各执行一次）：git config core.hooksPath .githooks
+# 手动跑：python scripts/prepublish_check.py --secrets-only
+PY=python3
+[ -x .venv/bin/python ] && PY=.venv/bin/python
+exec "$PY" scripts/prepublish_check.py --secrets-only

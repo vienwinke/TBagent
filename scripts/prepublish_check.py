@@ -1,7 +1,9 @@
-﻿# -*- coding: utf-8 -*-
+# -*- coding: utf-8 -*-
 """发布前审计：确保公开仓库不含密钥、不含真实敏感数据、结构完整
 
-用法：python scripts/prepublish_check.py
+用法：
+    python scripts/prepublish_check.py                  # 全量审计
+    python scripts/prepublish_check.py --secrets-only   # 只扫密钥（pre-commit 钩子用，快）
 """
 from __future__ import annotations
 
@@ -19,9 +21,27 @@ def git(*args: str) -> str:
     return subprocess.run(["git", "-C", str(ROOT), *args], capture_output=True, text=True).stdout
 
 
+# 密钥扫描核心抽到 scripts/secret_scan.py：纯函数、可被 tests 直接 import，
+# 这里的 CLI 流程 import 即执行，不适合放判定逻辑。
+try:                                    # 作为脚本运行（sys.path[0] = scripts/）
+    from secret_scan import iter_secret_hits, scan_secrets  # noqa: F401
+except ImportError:                     # 作为包导入（tests）
+    from scripts.secret_scan import iter_secret_hits, scan_secrets  # noqa: F401
+
+
+tracked = [l.strip() for l in git("ls-files").splitlines() if l.strip()]
+
+# pre-commit 快速通道：只扫密钥，命中即非 0 退出（阻断提交）
+if "--secrets-only" in sys.argv:
+    gate_hits = list(iter_secret_hits(ROOT, tracked))
+    for f, desc, snippet in gate_hits:
+        print("   ✗ %s 命中 %s: %s" % (f, desc, snippet))
+    print("密钥门禁：扫描 %d 个文件，命中 %d 条 %s"
+          % (len(tracked), len(gate_hits), "✓ 放行" if not gate_hits else "✗ 已阻断提交"))
+    sys.exit(1 if gate_hits else 0)
+
 print("=" * 74)
 print("1) 待发布文件清单（git 跟踪）")
-tracked = [l.strip() for l in git("ls-files").splitlines() if l.strip()]
 print("   共 %d 个文件" % len(tracked))
 
 forbidden = [f for f in tracked if re.search(r"(^|/)(\.env$|\.venv/|__pycache__/|\.git/)", f)]
@@ -36,27 +56,10 @@ if not snap:
 
 print("=" * 74)
 print("2) 密钥泄漏扫描（跟踪文件内容）")
-SECRET_PATTERNS = [
-    (r"sk-[A-Za-z0-9]{16,}", "OpenAI/DeepSeek 风格密钥"),
-    # 注意用 [ \t]* 而非 \s*：否则 "LLM_API_KEY=" 会跨行匹配到下一行（实测误报）
-    (r"(LLM_API_KEY|DEEPSEEK_API_KEY)[ \t]*=[ \t]*[\"']?[A-Za-z0-9_\-]{12,}", "环境变量里的真实密钥"),
-    (r"password\s*=\s*[\"'][^\"']{8,}[\"']", "硬编码密码"),
-]
 hits = 0
-for f in tracked:
-    p = ROOT / f
-    if not p.is_file() or p.stat().st_size > 2_000_000:
-        continue
-    try:
-        text = p.read_text(encoding="utf-8", errors="ignore")
-    except OSError:
-        continue
-    if f.endswith("prepublish_check.py"):
-        continue          # 本脚本自身含模式串
-    for pat, desc in SECRET_PATTERNS:
-        for m in re.finditer(pat, text):
-            hits += 1
-            FAIL.append("%s 命中 %s: %s" % (f, desc, m.group(0)[:40]))
+for f, desc, snippet in iter_secret_hits(ROOT, tracked):
+    hits += 1
+    FAIL.append("%s 命中 %s: %s" % (f, desc, snippet))
 print("   命中数: %d %s" % (hits, "✓" if hits == 0 else "✗"))
 
 print("=" * 74)
