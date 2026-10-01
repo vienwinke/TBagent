@@ -51,6 +51,22 @@ class LLMConfig:
     # 单价（元 / 百万 token）：用于成本统计，换模型时同步更新
     price_in: float = float(_env("LLM_PRICE_IN", "2.0") or 2.0)
     price_out: float = float(_env("LLM_PRICE_OUT", "9.0") or 9.0)
+    # 便宜档单价：路由分类（输出仅 8 token）、结果转述、追问建议都走这一档；
+    # 未配置则退回主档单价（估算偏保守，不会低估成本）
+    price_in_cheap: float = float(_env("LLM_PRICE_IN_CHEAP", "") or price_in)
+    price_out_cheap: float = float(_env("LLM_PRICE_OUT_CHEAP", "") or price_out)
+
+    def price_for(self, model: str | None) -> tuple[float, float]:
+        """按模型返回 (输入单价, 输出单价)，单位：元/百万 token。
+
+        为什么必须按模型区分：项目有主档/便宜档两个模型，而原先的成本统计用**单一单价**——
+        便宜档的调用会被按主档计价，账目是错的（成本面板与审计金额都受影响）。
+        """
+        if model and model == self.model:
+            return self.price_in, self.price_out
+        if model and model == self.model_cheap:
+            return self.price_in_cheap, self.price_out_cheap
+        return self.price_in, self.price_out
 
     @property
     def configured(self) -> bool:
@@ -151,6 +167,12 @@ GUARD = GuardConfig()
 SCHEMA_PATH = ROOT / "data" / "schema.json"
 INDEX_PATH = ROOT / "data" / "schema_index.json"
 LOG_LEVEL = _env("LOG_LEVEL", "INFO").upper()
+
+# 语义层范围判定是否启用 LLM 兜底（默认关闭）。
+# 关闭的理由：判定必须可复现（同一问题同一结论），规则层已覆盖明确的越权问法；
+# 兜底只在"规则一条都没命中"时介入 —— 它提高召回但会引入采样不确定性，
+# 属于按场景选择的开关（行业/合规要求更严时可开）。
+SCOPE_LLM_FALLBACK = _env("SCOPE_LLM_FALLBACK", "false").lower() in ("1", "true", "yes")
 
 
 def setup_logging() -> None:

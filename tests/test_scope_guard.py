@@ -178,6 +178,22 @@ def test_no_fallback_when_not_opted_in():
     assert d.allowed is True and d.source == "default"
 
 
+# ------------------------------------------------------------------ 接线（不是能力）
+def test_default_scope_llm_follows_config(monkeypatch):
+    """兜底开关必须真的能被配置驱动 —— 能力建好但没人调用，等于没建"""
+    import config
+
+    monkeypatch.setattr(config, "SCOPE_LLM_FALLBACK", False)
+    assert nl2sql.default_scope_llm() is None, "默认必须关闭（判定要可复现）"
+    monkeypatch.setattr(config, "SCOPE_LLM_FALLBACK", True)
+    assert nl2sql.default_scope_llm() is not None, "开了开关就该拿到可调用的模型函数"
+
+
+def test_local_principal_is_explicit_single_machine_admin():
+    p = nl2sql.local_principal()
+    assert p.is_privileged is True and p.role == ROLE_ADMIN
+
+
 # ------------------------------------------------------------------ 模型主动拒答
 def test_model_refusal_is_terminal_and_never_executes():
     """模型按提示词返回 {"refuse": true} → 直接拒答，不回环、不查库"""

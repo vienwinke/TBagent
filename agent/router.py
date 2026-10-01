@@ -115,12 +115,16 @@ ROUTE_SYSTEM = """判断用户问题的类型，只回复一个词：
 
 
 def llm_classify(question: str) -> str:
-    """可选的 LLM 分类器（仅在规则无法判定时调用，省 token）"""
+    """可选的 LLM 分类器（仅在规则无法判定时调用，省 token）
+
+    走**便宜档**：三选一的分类任务、输出上限 8 token，没有理由用主档模型。
+    """
     import llm as llm_mod
+    from config import LLM
 
     text = llm_mod.chat([{"role": "system", "content": ROUTE_SYSTEM},
                          {"role": "user", "content": question}], temperature=0, max_tokens=8,
-                        tag="route").strip().lower()
+                        tag="route", model=LLM.model_cheap).strip().lower()
     for k in (DATA, KNOWLEDGE, CHAT):
         if k in text:
             return k

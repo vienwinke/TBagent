@@ -44,6 +44,7 @@ class Usage:
     retries: int = 0
     seconds: float = 0.0
     _by_model: dict[str, int] = field(default_factory=dict)
+    _tokens_by_model: dict[str, list[int]] = field(default_factory=dict)   # model -> [prompt, completion]
 
     @property
     def total_tokens(self) -> int:
@@ -51,7 +52,16 @@ class Usage:
 
     @property
     def cost_yuan(self) -> float:
-        return self.prompt_tokens / 1e6 * LLM.price_in + self.completion_tokens / 1e6 * LLM.price_out
+        """按模型分别计价。
+
+        原先用单一单价乘总 token：项目有主档/便宜档两个模型时会把便宜档的调用按主档计价，
+        账目偏高且无法解释（成本面板、审计金额都会被带偏）。
+        """
+        total = 0.0
+        for model, (prompt, completion) in self._tokens_by_model.items():
+            pin, pout = LLM.price_for(model)
+            total += prompt / 1e6 * pin + completion / 1e6 * pout
+        return total
 
     def add(self, model: str, prompt: int, completion: int, seconds: float) -> None:
         self.calls += 1
@@ -59,6 +69,9 @@ class Usage:
         self.completion_tokens += completion
         self.seconds += seconds
         self._by_model[model] = self._by_model.get(model, 0) + 1
+        slot = self._tokens_by_model.setdefault(model, [0, 0])
+        slot[0] += prompt
+        slot[1] += completion
 
     def summary(self) -> dict[str, Any]:
         return {

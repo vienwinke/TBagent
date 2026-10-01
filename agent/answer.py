@@ -17,23 +17,48 @@ SUMMARY_SYSTEM = """你是数据分析助手。根据【问题】和【查询结
 - 不要输出 SQL、不要 Markdown、不要多余解释。"""
 
 
+def _cell(value: Any) -> str:
+    """单元格压缩：超长值截断，避免一个长文本把转述 prompt 撑爆"""
+    text = "" if value is None else str(value)
+    return text if len(text) <= 40 else text[:37] + "…"
+
+
+def _compact_table(columns: Sequence[str], rows: Sequence[Sequence[Any]], limit: int) -> str:
+    """把结果压成"表头 + 行"的 CSV 文本。
+
+    之前用的是 dict 列表（`[{'col': v}, {'col': v}…]`），列名每行重复一遍 ——
+    实测"20 行 × 4 列"的转述 prompt 达 1032 tokens，占一次问答全路径成本的 40%；
+    同样的信息用 CSV 只需约三分之一。行数也压下来：转述只要看懂数据形态，
+    总行数已单独给出（模型本来也数不准大结果集）。
+    """
+    body = list(rows)[:limit]
+    lines = [",".join(str(c) for c in columns)]
+    lines += [",".join(_cell(v) for v in r) for r in body]
+    text = "\n".join(lines)
+    if len(rows) > len(body):
+        text += "\n（其余 %d 行已省略）" % (len(rows) - len(body))
+    return text
+
+
 def summarize(question: str, columns: Sequence[str], rows: Sequence[Sequence[Any]],
               *, llm_fn: Callable[[list[dict[str, str]]], str] | None = None,
-              max_rows: int = 20, template_first: bool | None = None) -> str:
+              max_rows: int = 8, template_first: bool | None = None) -> str:
     """生成一句话答案（llm_fn 可注入，便于单测）
 
     成本优化：**简单结果直接用确定性模板**，不调 LLM ——
     实测这类结果占多数，省下一次调用的输入 token（约 400~500）与 1~3 秒延迟。
     复杂结果（多行多列）仍走 LLM 转述。
     """
-    from config import SUMMARY_TEMPLATE_FIRST
+    from config import LLM, SUMMARY_TEMPLATE_FIRST
 
     use_template = SUMMARY_TEMPLATE_FIRST if template_first is None else template_first
     if use_template and _is_simple(columns, rows):
         return _fallback(len(rows), columns, rows)
-    call = llm_fn or (lambda messages: llm_mod.chat(messages, temperature=0, max_tokens=256, tag="summary"))
-    preview = [dict(zip(columns, r)) for r in list(rows)[:max_rows]]
-    payload = "列：%s\n行数：%d\n数据：%s" % (", ".join(columns), len(rows), preview)
+    # 转述走**便宜档**：这是"把结果说成一句话"的简单任务，无需主档模型
+    # （配置里的 LLM_MODEL_CHEAP 此前全仓无人使用，设计文档却明确要求 summary 走 cheap 档）
+    call = llm_fn or (lambda messages: llm_mod.chat(messages, temperature=0, max_tokens=256,
+                                                   tag="summary", model=LLM.model_cheap))
+    payload = "行数：%d\n数据（CSV）：\n%s" % (len(rows), _compact_table(columns, rows, max_rows))
     messages = [
         {"role": "system", "content": SUMMARY_SYSTEM},
         {"role": "user", "content": "【问题】%s\n【查询结果】%s" % (question, payload)},

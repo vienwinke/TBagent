@@ -148,7 +148,10 @@ def handle(question: str) -> dict:
         return item
 
     before = llm_mod.USAGE.summary().copy()
-    r = nl2sql.answer(question)
+    # 身份显式声明：单机演示 = 单机管理员（不做行级隔离，结果里 isolated=False 可见）。
+    # 嵌入服务化时这里必须换成从 JWT 解析出的 Principal（见 docs/treatbord嵌入-接口契约.md §2.2）。
+    r = nl2sql.answer(question, principal=nl2sql.local_principal(),
+                      scope_llm_fn=nl2sql.default_scope_llm())
     after = llm_mod.USAGE.summary()
 
     item.update(sql=r.sql, guard=r.guard, query=r.query, rows=r.rows,

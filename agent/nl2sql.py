@@ -113,6 +113,28 @@ def _default_llm_fn(messages: list[dict[str, str]]) -> dict[str, Any]:
     return llm_mod.chat_json(messages, tag="nl2sql")
 
 
+def local_principal() -> Principal:
+    """单机（Streamlit / CLI / 评测）的**显式**身份入口。
+
+    与 `_local_principal` 是同一实现，公开出来是为了让入口层显式声明
+    "这里是单机管理员"，而不是靠不传参数隐式落到默认值 ——
+    嵌入服务化时这一行必须换成由 JWT 构造的 Principal（见接口契约 §2.2）。
+    """
+    return _local_principal()
+
+
+def default_scope_llm() -> LlmFn | None:
+    """按配置给出语义层兜底用的模型函数；未开启则返回 None。
+
+    默认关闭（SCOPE_LLM_FALLBACK=false）：范围判定必须可复现，
+    规则层已覆盖明确的越权问法；兜底只在规则完全没命中时介入，
+    开了会提高召回但引入采样不确定性 —— 由部署方按合规强度决定。
+    """
+    from config import SCOPE_LLM_FALLBACK
+
+    return _default_llm_fn if SCOPE_LLM_FALLBACK else None
+
+
 def _extract(raw: Any) -> tuple[str, str, str]:
     """从模型输出里取出 (sql, reason, refuse_reason)；结构不对就报错（触发回环）
 
