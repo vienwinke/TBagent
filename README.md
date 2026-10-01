@@ -88,6 +88,9 @@ data/         schema.json · schema_index.json · snapshot.sqlite · knowledge/ 
 | P50 / P95 延迟 | P95 ≤ 3s | 2822ms / 4925ms | 端到端 |
 | 单次成本 | ≤ ¥0.01 | token × 单价 |
 
+> EX 判定用**本次运行实时执行参考 SQL** 得到的基准（时间类问题口径相对"现在"，存档基准会过期，
+> 见 [docs/评估报告.md](docs/评估报告.md) §2.1）；同一份代码重复跑分仍有波动，单次 <8pt 的差异不构成因果。
+
 ## 技术选型与取舍
 
 - **裸写链路而非 LangChain**：链路短、每步可控，面试追问细节不露怯

@@ -163,12 +163,56 @@ def verify_references() -> dict[str, Any]:
             summary["by_category"][cat]["failed"] += 1
     return {"summary": summary, "details": results}
 
-def score(*, top_k=None, max_repair=1, label="baseline", limit=None) -> dict[str, Any]:
+def _select(cases: list[dict[str, Any]], *, limit: int | None = None, ids: str | None = None,
+            category: str | None = None) -> list[dict[str, Any]]:
+    """按 id / 类别筛选要跑的用例。
+
+    为什么需要：一轮 60 题跑分要花真钱、且存在 33~46/51 的跑分方差，
+    定位"某一题型是不是被改坏了"必须能只复跑那一组并反复迭代（例如 --category time）。
+    """
+    out = cases
+    if category:
+        out = [c for c in out if str(c.get("category")) == category]
+    if ids:
+        want = {i.strip() for i in str(ids).split(",") if i.strip()}
+        out = [c for c in out if c["id"] in want]
+    if limit:
+        out = out[:limit]
+    return out
+
+
+def _live_reference(case: dict[str, Any]) -> tuple[list[Any] | None, str | None]:
+    """在**本次运行**执行参考 SQL，返回 (参考结果行, 参考结果哈希)。
+
+    为什么不能只用 cases.yaml 里存档的 hash：时间类问题的口径是相对"现在"的
+    （"最近 7 天""本月""距截止不到 3 天"），数据不动、时钟在走。实测 2026-10-01：
+    **15 条时间题里有 9 条的存档 hash 已无法被参考 SQL 自己复现** ——
+    等于给这些题钉了一个不可能达到的上限（模型再准也判 EX_MISS）。
+    历史上"同配置跑分 33~46/51 波动"里有一部分正是这个漂移，而不是模型抖动。
+
+    实时基准同时消除了另一类错判：模型与参考在同一时刻、同一份数据上比较。
+    """
+    sql = case.get("reference_sql")
+    if not sql:
+        return None, None
+    try:
+        rw = policy.rewrite(sql, EVAL_PRINCIPAL)
+        qr = policy.execute(rw, check_cost=False)
+        return list(qr.rows), rows_hash(qr.rows)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("[eval] {} 参考 SQL 执行失败，回退到存档 hash: {}",
+                       case.get("id"), str(exc)[:100])
+        return None, None
+
+
+def score(*, top_k=None, max_repair=1, label="baseline", limit=None,
+          ids=None, category=None) -> dict[str, Any]:
     data = load_cases()
-    cases = data["cases"][:limit] if limit else data["cases"]
+    cases = _select(data["cases"], limit=limit, ids=ids, category=category)
     per_case, latencies, tokens = [], [], []
     ex_hit = ex_relaxed_hit = ex_total = blocked = block_total = mask_ok = mask_total = repaired = 0
     danger_generated = 0
+    stale = 0                      # 存档基准已漂移的题数（改用实时基准判定）
     for c in cases:
         expect = c.get("expect", "answer")
         t0 = time.time()
@@ -204,7 +248,11 @@ def score(*, top_k=None, max_repair=1, label="baseline", limit=None) -> dict[str
             mask_ok += ok
         else:
             ex_total += 1
-            exp = (c.get("expected") or {}).get("hash")
+            stored = (c.get("expected") or {}).get("hash")
+            ref_rows, live = _live_reference(c)
+            exp = live or stored                       # ★ 优先实时基准，存档仅作兜底
+            if live and stored and live != stored:
+                stale += 1                             # 存档基准已漂移（会把结果暴露出来）
             got = rows_hash([tuple(x.values()) for x in r.rows]) if (r.ok and r.rows) else None
             ok = bool(exp) and got == exp
             relaxed = False
@@ -212,18 +260,22 @@ def score(*, top_k=None, max_repair=1, label="baseline", limit=None) -> dict[str
                 ref_meta = c.get("expected") or {}
                 n_ref = len(ref_meta.get("columns") or [])
                 n_got = len(r.query.get("columns") or [])
+                if ref_rows is None:                   # 实时参考取不到时才自己重跑一次
+                    try:
+                        rw2 = policy.rewrite(c.get("reference_sql") or "", EVAL_PRINCIPAL)
+                        ref_rows = list(policy.execute(rw2, check_cost=False).rows)
+                    except Exception as exc:  # noqa: BLE001
+                        logger.warning("[eval] {} 宽松比对取参考失败: {}", c["id"], str(exc)[:80])
+                        ref_rows = []
                 try:
-                    rw2 = policy.rewrite(c.get("reference_sql") or "", EVAL_PRINCIPAL)
-                    ref_qr = policy.execute(rw2, check_cost=False)
-                    # 注意：reference 侧是 execute_readonly 返回的【元组】，agent 侧是 as_dicts 的【字典】，
-                    # 之前对元组误调 .values() 导致异常被静默吞掉、宽松判定从未生效
-                    relaxed = relaxed_match(list(ref_qr.rows),
+                    relaxed = relaxed_match(list(ref_rows),
                                             [tuple(x.values()) for x in r.rows], n_ref, n_got)
                 except Exception as exc:  # noqa: BLE001
                     logger.warning("[eval] {} 宽松比对失败: {}: {}", c["id"], type(exc).__name__, str(exc)[:80])
                     relaxed = False
             row["verdict"] = "EX_HIT" if ok else ("EX_RELAXED" if relaxed else ("EX_MISS" if r.ok else "FAILED"))
             row["expected_hash"], row["got_hash"] = exp, got
+            row["baseline_source"] = "live" if live else ("stored" if stored else None)
             ex_hit += ok
             ex_relaxed_hit += bool(ok or relaxed)
         if r.repaired:
@@ -242,6 +294,7 @@ def score(*, top_k=None, max_repair=1, label="baseline", limit=None) -> dict[str
                   "blocked": blocked, "block_total": block_total,
                   "mask_rate": round(mask_ok / mask_total, 4) if mask_total else 0.0,
                   "repaired_cases": repaired,
+                  "stale_baselines": stale,
                   "latency_p50_ms": int(percentile(latencies, 50)),
                   "latency_p95_ms": int(percentile(latencies, 95)),
                   "avg_tokens": int(sum(tokens) / len(tokens)) if tokens else 0,
@@ -264,6 +317,7 @@ def scorecard(result: dict[str, Any]) -> str:
              "| 其中模型照做了危险请求 | %d 题（护栏必要性） |" % m["danger_generated"],
              "| 脱敏命中率 | %.1f%% |" % (m["mask_rate"] * 100),
              "| 触发回环修复 | %d 题 |" % m["repaired_cases"],
+             "| 存档基准已漂移（已改用实时基准） | %d 题 |" % m.get("stale_baselines", 0),
              "| 延迟 P50 / P95 | %dms / %dms |" % (m["latency_p50_ms"], m["latency_p95_ms"]),
              "| tokens 平均/总计 | %d / %d |" % (m["avg_tokens"], m["total_tokens"]), ""]
     bad = [c for c in result["cases"] if c["verdict"] in ("EX_MISS", "FAILED", "UNSAFE", "MASK_MISS")]
@@ -353,6 +407,8 @@ def main() -> None:
     ap.add_argument("--score", action="store_true", help="跑分（需 API Key）")
     ap.add_argument("--ablation", action="store_true", help="消融实验（需 API Key）")
     ap.add_argument("--limit", type=int, default=None, help="只跑前 N 题")
+    ap.add_argument("--ids", type=str, default=None, help="只跑指定 id（逗号分隔，便于复跑坏例）")
+    ap.add_argument("--category", type=str, default=None, help="只跑某个题型（agg/join/time/trap）")
     ap.add_argument("--kb", action="store_true", help="知识库问答评估（RAG）")
     args = ap.parse_args()
 
@@ -383,7 +439,7 @@ def main() -> None:
         cards = []
         for label, kw in runs:
             print("\n=== %s ===" % label)
-            r = score(label=label, limit=args.limit, **kw)
+            r = score(label=label, limit=args.limit, ids=args.ids, category=args.category, **kw)
             cards.append(scorecard(r))
             print(scorecard(r))
         (OUT / "scorecard.md").write_text("\n\n---\n\n".join(cards), encoding="utf-8")

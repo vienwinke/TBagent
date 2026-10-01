@@ -200,12 +200,17 @@ answer_stream(question: str, principal: Principal, *,
 
 ```bash
 # 越权红线（离线：不连库、不需要 API Key），退出码非 0 即阻断
-python -m eval.security_suite          # 分类表 + 拦截率/泄漏条数
+python -m eval.security_suite          # 54 条（含 13 条语义越权）；分类表 + 拦截率/泄漏条数
 python -m eval.security_suite --json   # 给 CI 消费
 
 # 单元/集成回归
-python -m pytest -q                    # 含 policy 42 条 + 安全套件门禁
+python -m pytest -q                    # 195 条（含 policy 42 条 + 语义层 + 安全套件门禁）
+
+# 密钥门禁（已挂 .githooks/pre-commit；启用见 docs/开发环境.md §5）
+python scripts/prepublish_check.py --secrets-only
 ```
+
+> 条数为 **2026-10-01** 快照。门禁的判据是"退出码为 0"，不是条数 —— 条数会随用例增长。
 
 ## 6. 已知待定项（不影响 L2 契约）
 

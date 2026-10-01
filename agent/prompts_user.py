@@ -150,13 +150,20 @@ NL2SQL_USER_RULES = """【本角色（USER）的额外约束】
 - 只输出 SELECT / WITH；可用 JOIN、GROUP BY、聚合、子查询。
 - 只使用上面列出的表和列，列名必须完全一致，不要臆造字段。
 - 只返回回答问题所需的列，不要顺手多加统计列（问"总赏金"就只给 SUM(reward)）。
+- **条件最小化**：只加问题要求的过滤条件，不要自行补充问题没问的范围。
+  "登录次数"就是 login_log 的全部记录，不要加 success = 1；
+  "任务数"不要自行加 status = 'OPEN'。只有问题本身限定了范围（"成功的登录""在招任务"）才加。
+- **时间区间要完整**："不到/少于 N 天" = 现在 < 字段 <= 现在 + N 天（**下界不能省**）；
+  "已经过了 X" = 字段 < 现在；"最近 N 天" = 字段 >= 现在 - N 天。
 - 中文别名便于阅读（如 COUNT(*) AS 接取数）。
 - 时间口径：最近 7 天 = create_time >= DATE_SUB(CURDATE(), INTERVAL 7 DAY)；
   今天 = DATE(create_time) = CURDATE()；按月 = DATE_FORMAT(create_time, '%Y-%m')。"""
 
 NL2SQL_ADMIN_RULES = """【本角色（ADMIN）说明】
-- 不做行级限制，可查全平台；但 openid / unionid / password_hash / ip / 手机号仍会被系统脱敏，
-  不要试图绕过或拼接这些字段。
+- 不做行级限制，可查全平台；但 openid / unionid / password_hash / ip / 手机号仍会被系统脱敏。
+  因此：**该写就正常写**（需要核查时把这些列放进 SELECT 是允许的，系统会在返回前自动脱敏），
+  不要因为"这列敏感"就拒绝生成查询、返回 refuse —— 那会让运营查不到东西；
+  但禁止用别名伪装、字符串拼接、CASE WHEN 或子查询把它们绕开脱敏。
 - 日志表没有 deleted 字段（audit_log / login_log / task_status_log / claim_status_log /
   app_config），不要给它们加 deleted = 0。
 - 你产出的 SQL 会展示给运营核查，因此要**可读**：别名清晰、必要时加 ORDER BY。
@@ -169,6 +176,11 @@ NL2SQL_ADMIN_RULES = """【本角色（ADMIN）说明】
 - 只输出 SELECT / WITH；列名必须与 Schema 完全一致。
 - **只返回回答问题所需的列**，不要额外添加未被要求的统计列（问"总赏金"就只给 SUM(reward)，
   不要顺手加 COUNT(*)）；问题明确要求多个指标时才给多列。
+- **条件最小化**：只加问题要求的过滤条件，不要自行补充问题没问的范围
+  （问"登录次数"不要加 success = 1；问"任务数"不要加 status = 'OPEN'），
+  只有问题本身限定了范围才加。
+- **时间区间要完整**："不到/少于 N 天" = 现在 < 字段 <= 现在 + N 天（**下界不能省**）；
+  "已经过了 X" = 字段 < 现在。
 - 时间口径：最近 7 天 = create_time >= DATE_SUB(CURDATE(), INTERVAL 7 DAY)；
   按月 = DATE_FORMAT(create_time, '%Y-%m')。"""
 
