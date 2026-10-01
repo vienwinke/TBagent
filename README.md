@@ -129,7 +129,7 @@ data/         schema.json · schema_index.json · snapshot.sqlite · knowledge/ 
 | G4 编排层 `agent/pipeline.py`（事件流，UI 与服务层共用） | ✅ |
 | P0 拆服务：FastAPI + SSE + `/healthz` `/readyz` `/metrics` | ✅ |
 | P1 身份与收口：HS256 内部 JWT（算法锁定）· 行级隔离 · 缓存键带权限 · USER 关闭裸 SQL | ✅ |
-| P2 审计与限流 | ◐ **审计已落库**（`agent/audit.py` best-effort 写 `ai_query_audit`；建表走 Flyway `V9`）· trace 透传 · 8s 预算与诚实降级 · 幂等 · 同 session 串行 · 并发上限 429；**Redis 后端已就绪**（`SIDECAR_REDIS_URL`，多副本共享配额/幂等/会话锁；未配则进程内）· **`jti` 黑名单已实现**（Redis，即时降权）· **成本按用户归集待做**（审计表已按行记 cost_yuan） |
+| P2 审计与限流 | ◐ **审计已落库**（`agent/audit.py` best-effort 写 `ai_query_audit`；建表走 Flyway `V9`）· trace 透传 · 8s 预算与诚实降级 · 幂等 · 同 session 串行 · 并发上限 429；**Redis 后端已就绪**（`SIDECAR_REDIS_URL`，多副本共享配额/幂等/会话锁；未配则进程内）· **`jti` 黑名单已实现**（Redis，即时降权）· **成本按用户归集已就绪**（`scripts/cost_report.py` 按用户/按天聚合） |
 | P3 多轮指代消解 · P4 角色化运营版 · P5 上线加固 | ⬜ |
 
 > 验收门禁（CI 四道，全部退出码阻断）：`ruff check` → 密钥扫描 → 越权红线 54 条 → 回归 293 条。
