@@ -1,4 +1,4 @@
-﻿# -*- coding: utf-8 -*-
+# -*- coding: utf-8 -*-
 """选图规则 + 意图路由 + 结果转述 的单测（全部可离线运行，不依赖 API Key）"""
 import sys
 from pathlib import Path

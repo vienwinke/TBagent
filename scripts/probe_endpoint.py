@@ -1,4 +1,4 @@
-﻿# -*- coding: utf-8 -*-
+# -*- coding: utf-8 -*-
 """大模型端点探测：验证任意 OpenAI 兼容端点是否可用（含 Command Code Provider API）
 
 检查项：

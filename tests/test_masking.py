@@ -1,4 +1,4 @@
-﻿# -*- coding: utf-8 -*-
+# -*- coding: utf-8 -*-
 """脱敏单测：覆盖别名/表达式绕过（评估集暴露的真实漏洞）"""
 import sys
 from pathlib import Path

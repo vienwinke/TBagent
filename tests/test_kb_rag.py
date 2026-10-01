@@ -1,4 +1,4 @@
-﻿# -*- coding: utf-8 -*-
+# -*- coding: utf-8 -*-
 """知识库 / RAG / 三分类路由 的单测（全部可离线，不依赖 API Key）"""
 import sys
 from pathlib import Path

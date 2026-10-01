@@ -1,4 +1,4 @@
-﻿# -*- coding: utf-8 -*-
+# -*- coding: utf-8 -*-
 """模型选型实测：用真实 NL2SQL 小任务比较 延迟 / 输出是否为空 / JSON 是否合规"""
 import json, sys, time
 sys.path.insert(0, '/home/KeYa/Project/agent')

@@ -1,4 +1,4 @@
-﻿# -*- coding: utf-8 -*-
+# -*- coding: utf-8 -*-
 """选图/兜底的边界用例（演示暴露的问题）"""
 import sys
 from pathlib import Path

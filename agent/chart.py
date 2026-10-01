@@ -1,4 +1,4 @@
-﻿# -*- coding: utf-8 -*-
+# -*- coding: utf-8 -*-
 """结果自动选图：根据结果集的"形状"决定可视化方式（只有规则，不依赖绘图库，便于单测）
 
 为什么不用 matplotlib 直出 PNG：图表在 Streamlit 里由浏览器渲染（Altair/Vega-Lite），

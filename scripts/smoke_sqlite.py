@@ -1,4 +1,4 @@
-﻿# -*- coding: utf-8 -*-
+# -*- coding: utf-8 -*-
 import os, sys
 os.environ["DB_BACKEND"] = "sqlite"
 sys.path.insert(0, '/home/KeYa/Project/agent')

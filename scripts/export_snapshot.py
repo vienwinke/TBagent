@@ -1,4 +1,4 @@
-﻿# -*- coding: utf-8 -*-
+# -*- coding: utf-8 -*-
 """导出公开演示用的 SQLite 快照（MySQL → SQLite），并【脱敏】敏感字段
 
 为什么需要：Streamlit Cloud / HF Spaces 无法访问你本机的 MySQL。

@@ -1,4 +1,4 @@
-﻿meta:
+meta:
   version: 1
   note: 知识库问答评估：answer 类看"是否答对且引用命中"；refuse 类看"资料不足时是否如实拒答"
   cases: 10
