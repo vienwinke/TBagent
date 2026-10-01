@@ -16,7 +16,8 @@
 | 超时预算 | 端到端 **8s** 硬超时（`SIDECAR_TIMEOUT_MS`）· 单次 LLM **12s** · SQL **3s**（`SQL_TIMEOUT_MS`）<br>✅ 已实现：超预算给 **error + done.timeout** 的诚实降级（不是 500）；单次模型调用也按预算设上限（实测有 25s 卡顿，不设上限会穿透） |
 | 追踪 | `X-Trace-Id` 由 treatbord 生成，边车**原样沿用**（不自己另生成） ✅ 已实现 |
 | 幂等 | `client_msg_id` 幂等（TTL 10min）；重发返回**逐字节相同**的结果，不重复计费<br>✅ 已实现（**进程内**）；多副本必须换 Redis —— 否则配额翻倍、幂等失效 |
-| 并发 | 同 `session_id` 串行 ✅ · 全局并发上限 ✅（`SIDECAR_MAX_CONCURRENCY`，超限 **429 QUOTA_EXCEEDED**，不排队） |
+| 并发 | 同 `session_id` 串行 ✅（等不到 → **429**）· 全局并发上限 ✅（`SIDECAR_MAX_CONCURRENCY`，超限 **429 QUOTA_EXCEEDED**，不排队） |
+| 限流后端 | ✅ 两种：**进程内**（默认，单副本）与 **Redis**（`SIDECAR_REDIS_URL`，多副本共享配额/幂等/会话锁）。Redis 不可用时**自动降级为进程内并告警**（可用性优先）。`/readyz` 的 `limiter` 字段可直接看到当前后端 |
 | 版本 | `policy_version=pol-2026.11-02` · `prompt_version=p2026.11-01`，两者随响应返回 |
 
 ## 1. L1 · 小程序 ↔ treatbord

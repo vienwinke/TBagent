@@ -127,11 +127,22 @@ def test_slot_is_released_after_request(client, monkeypatch):
         "上一个请求结束后必须释放坑位"
 
 
-def test_same_session_lock_is_shared_and_isolated():
-    a1 = sidecar.LIMITER.session_lock("s-A")
-    a2 = sidecar.LIMITER.session_lock("s-A")
-    b = sidecar.LIMITER.session_lock("s-B")
-    assert a1 is a2 and a1 is not b
+def test_same_session_lock_is_shared_and_isolated(monkeypatch):
+    """同一 session 互斥、不同 session 互不影响；等待上限到了抛 TimeoutError（端点转 429）"""
+    monkeypatch.setenv("SIDECAR_SESSION_LOCK_WAIT_MS", "50")
+    sidecar.LIMITER.reset()
+
+    token_a = sidecar.LIMITER.acquire_session("s-A")
+    try:
+        with pytest.raises(TimeoutError):
+            sidecar.LIMITER.acquire_session("s-A")        # 同 session：等不到
+        token_b = sidecar.LIMITER.acquire_session("s-B")  # 不同 session：不受影响
+        sidecar.LIMITER.release_session("s-B", token_b)
+    finally:
+        sidecar.LIMITER.release_session("s-A", token_a)
+
+    again = sidecar.LIMITER.acquire_session("s-A")        # 释放后可再次获取
+    sidecar.LIMITER.release_session("s-A", again)
 
 
 def test_same_session_requests_do_not_overlap(client, monkeypatch):

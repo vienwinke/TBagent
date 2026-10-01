@@ -2,3 +2,4 @@
 # 只给服务化用；Streamlit 演示部署走 requirements.txt，不需要这些
 fastapi>=0.115
 uvicorn>=0.30
+redis>=5               # 仅当 SIDECAR_REDIS_URL 打开时用到（多副本限流/幂等）

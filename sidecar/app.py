@@ -38,6 +38,7 @@ from config import LLM
 from agent import audit as audit_mod
 from agent import pipeline, policy
 from sidecar import auth
+from sidecar.limiter import make_limiter
 from agent.pipeline import Deps
 from agent.policy import Principal
 
@@ -83,75 +84,9 @@ def _env_int(name: str, default: int) -> int:
         return default
 
 
-class _Limiter:
-    """并发闸门 + 同 session 串行 + client_msg_id 幂等（**进程内**实现）。
-
-    生产形态要换 Redis：多副本下进程内状态各自为政（配额会翻倍、幂等会漏）。
-    这里先把**语义**做对，接口保持同一形状 —— 替换时只动这一个类。
-    """
-
-    def __init__(self) -> None:
-        self._lock = threading.Lock()
-        self._sem: threading.BoundedSemaphore | None = None
-        self._sem_size = 0
-        self._session_locks: dict[str, threading.Lock] = {}
-        self._seen: dict[str, tuple[float, str]] = {}
-
-    def _slots(self) -> threading.BoundedSemaphore:
-        size = max(1, _env_int("SIDECAR_MAX_CONCURRENCY", 4))
-        with self._lock:
-            if self._sem is None or self._sem_size != size:
-                self._sem = threading.BoundedSemaphore(size)
-                self._sem_size = size
-            return self._sem
-
-    def try_acquire(self) -> bool:
-        """非阻塞占坑：满了就让调用方直接 429，而不是把请求堆在队列里"""
-        return self._slots().acquire(blocking=False)
-
-    def release(self) -> None:
-        try:
-            self._slots().release()
-        except ValueError:
-            pass
-
-    def session_lock(self, session_id: str) -> threading.Lock:
-        """契约 §0：同 session 串行（避免同一会话的并发请求互相插队）"""
-        with self._lock:
-            return self._session_locks.setdefault(session_id, threading.Lock())
-
-    def replay(self, key: str) -> str | None:
-        """命中幂等记录 → 返回上次的完整 SSE 文本（重发不重复计费）"""
-        if not key:
-            return None
-        with self._lock:
-            item = self._seen.get(key)
-            if not item:
-                return None
-            expires_at, frames = item
-            if time.monotonic() > expires_at:
-                self._seen.pop(key, None)
-                return None
-            return frames
-
-    def remember(self, key: str, frames: str) -> None:
-        if not key:
-            return
-        ttl = max(1, _env_int("SIDECAR_IDEMPOTENCY_TTL_SEC", 600))
-        with self._lock:
-            if len(self._seen) > 1000:          # 粗略上限，避免无界增长
-                self._seen.clear()
-            self._seen[key] = (time.monotonic() + ttl, frames)
-
-    def reset(self) -> None:
-        with self._lock:
-            self._session_locks.clear()
-            self._seen.clear()
-            self._sem = None
-            self._sem_size = 0
 
 
-LIMITER = _Limiter()
+LIMITER = make_limiter()
 
 STATS = _Stats()
 
@@ -227,7 +162,8 @@ def _deps_for(budget_s: float) -> Deps | None:
     )
 
 
-def _stream(req: ChatRequest, principal: Principal, trace_id: str | None, idem_key: str) -> Iterator[str]:
+def _stream(req: ChatRequest, principal: Principal, trace_id: str | None, idem_key: str,
+            session_token: str) -> Iterator[str]:
     """把 pipeline 的事件流转成 SSE 帧；同时负责：预算、串行、幂等、记账、释放并发坑位。"""
     budget_s = max(0.5, _env_int("SIDECAR_TIMEOUT_MS", 8000) / 1000.0)
     deadline = time.monotonic() + budget_s
@@ -242,44 +178,45 @@ def _stream(req: ChatRequest, principal: Principal, trace_id: str | None, idem_k
         return frame
 
     try:
-        with LIMITER.session_lock(req.session_id):        # 契约 §0：同 session 串行
-            chunks.append(": connected\n\n")     # 首字节：尽早给前端反馈
-            yield chunks[-1]                    # 也进幂等缓冲，重放才能逐字节一致
-            for event, data in pipeline.answer_stream(
-                    req.question, principal,
-                    session_id=req.session_id,
-                    trace_id=trace_id,
-                    deps=_deps_for(budget_s),
-                    # 审计落库（AUDIT_ENABLED，默认关闭）：sink 抛异常不影响问答，见 agent/audit.py
-                    audit_sink=audit_mod.record if audit_mod.enabled() else None):
-                if event == "done":
-                    denied = bool(data.get("denied"))
-                    tokens, cost = int(data.get("tokens", 0)), float(data.get("cost_yuan", 0.0))
-                    route = data.get("route")
-                elif event == "route":
-                    route = data.get("route")
-                elif event == "error":
-                    error = True
-                yield emit(event, data)
-                if event in ("done", "error"):
-                    break
-                if time.monotonic() > deadline:
-                    # 预算耗尽：给诚实降级（不是 500，也不假装成功）
-                    error = True
-                    yield emit("error", {"code": "LLM_UNAVAILABLE",
-                                         "message": "端到端预算 %dms 已耗尽（模型侧超时）"
-                                                    % int(budget_s * 1000),
-                                         "retryable": True})
-                    yield emit("done", {"elapsed_ms": int(budget_s * 1000), "route": route,
-                                        "denied": False, "tokens": tokens, "cost_yuan": cost,
-                                        "timeout": True, "cache_hit": False,
-                                        "repaired": False, "attempts": 0})
-                    break
+        # 会话锁已在端点取得、由本生成器在 finally 释放（见 chat 端点的 acquire_session）
+        chunks.append(": connected\n\n")     # 首字节：尽早给前端反馈
+        yield chunks[-1]                    # 也进幂等缓冲，重放才能逐字节一致
+        for event, data in pipeline.answer_stream(
+                req.question, principal,
+                session_id=req.session_id,
+                trace_id=trace_id,
+                deps=_deps_for(budget_s),
+                # 审计落库（AUDIT_ENABLED，默认关闭）：sink 抛异常不影响问答，见 agent/audit.py
+                audit_sink=audit_mod.record if audit_mod.enabled() else None):
+            if event == "done":
+                denied = bool(data.get("denied"))
+                tokens, cost = int(data.get("tokens", 0)), float(data.get("cost_yuan", 0.0))
+                route = data.get("route")
+            elif event == "route":
+                route = data.get("route")
+            elif event == "error":
+                error = True
+            yield emit(event, data)
+            if event in ("done", "error"):
+                break
+            if time.monotonic() > deadline:
+                # 预算耗尽：给诚实降级（不是 500，也不假装成功）
+                error = True
+                yield emit("error", {"code": "LLM_UNAVAILABLE",
+                                     "message": "端到端预算 %dms 已耗尽（模型侧超时）"
+                                                % int(budget_s * 1000),
+                                     "retryable": True})
+                yield emit("done", {"elapsed_ms": int(budget_s * 1000), "route": route,
+                                    "denied": False, "tokens": tokens, "cost_yuan": cost,
+                                    "timeout": True, "cache_hit": False,
+                                    "repaired": False, "attempts": 0})
+                break
         if idem_key:
             LIMITER.remember(idem_key, "".join(chunks))
     finally:
         STATS.record(denied=denied, error=error, tokens=tokens, cost=cost)
-        LIMITER.release()                                  # 释放并发坑位（含客户端断开）
+        LIMITER.release_session(req.session_id, session_token)   # 释放会话锁
+        LIMITER.release()                                        # 释放并发坑位（含客户端断开）
 
 
 @app.post("/v1/ai/chat")
@@ -298,6 +235,17 @@ def chat(req: ChatRequest, request: Request) -> Any:
                             content={"code": "QUOTA_EXCEEDED",
                                      "message": "当前并发已满，请稍后重试", "retryable": True})
 
+    try:
+        # 契约 §0：同 session 串行。锁在端点里拿（拿不到就干净地 429），
+        # 由流式生成器在 finally 释放 —— 放到生成器里拿会让超时变成"流中途 500"。
+        session_token = LIMITER.acquire_session(req.session_id)
+    except TimeoutError:
+        LIMITER.release()
+        return JSONResponse(status_code=429,
+                            content={"code": "QUOTA_EXCEEDED",
+                                     "message": "该会话正在处理上一条消息，请稍后重试",
+                                     "retryable": True})
+
     # 契约 §0：trace 由 Java 侧生成，边车**原样沿用**（否则线上排障要两边对数）
     trace_id = (request.headers.get("X-Trace-Id") or "").strip() or None
     idem_key = ("%s|%s" % (principal.user_id, req.client_msg_id)) if req.client_msg_id else ""
@@ -311,7 +259,7 @@ def chat(req: ChatRequest, request: Request) -> Any:
                                  headers={"Cache-Control": "no-cache",
                                           "X-Idempotent-Replay": "1"})
 
-    return StreamingResponse(_stream(req, principal, trace_id, idem_key),
+    return StreamingResponse(_stream(req, principal, trace_id, idem_key, session_token),
                              media_type="text/event-stream",
                              headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
 
@@ -338,6 +286,7 @@ def readyz() -> dict[str, Any]:
             "db": db,
             "policy_version": policy.POLICY_VERSION,
             "auth_configured": auth_configured(),
+            "limiter": LIMITER.backend(),          # memory（单副本）或 redis（多副本共享）
             "audit_enabled": audit_mod.enabled(),
             "audit": audit_mod.stats(),
             "dev_principal": bool(os.getenv("SIDECAR_DEV_PRINCIPAL", "").strip())}
