@@ -103,7 +103,6 @@ class SchemaIndex:
                 meta["fallback"] = "local 后端不可用（%s），已回退 bm25" % type(exc).__name__
                 backend = "bm25"
         if backend == "bm25":
-            from rank_bm25 import BM25Okapi  # noqa: PLC0415
 
             INDEX_PATH.write_text(json.dumps({**meta, "corpus": corpus}, ensure_ascii=False), encoding="utf-8")
         return meta

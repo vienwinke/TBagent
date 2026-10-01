@@ -7,7 +7,6 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from agent import nl2sql  # noqa: E402
 from agent import prompts_user  # noqa: E402
-from agent import sql_guard  # noqa: E402
 from agent.policy import Principal  # noqa: E402
 
 GOOD = {"sql": "SELECT COUNT(*) AS 任务数 FROM task WHERE deleted = 0", "reason": "统计任务总数"}

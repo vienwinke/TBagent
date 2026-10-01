@@ -9,7 +9,7 @@ import os, sys
 os.environ["DB_BACKEND"] = "sqlite"
 sys.path.insert(0, '/home/KeYa/Project/agent')
 from config import IS_SQLITE, SQL_DIALECT, setup_logging
-from agent import executor as ex, nl2sql, policy, router, chart
+from agent import executor as ex, nl2sql, policy, chart
 from agent.policy import ROLE_ADMIN, Principal
 
 setup_logging()

@@ -1,0 +1,12 @@
+# 代码质量门禁：只开"真问题"这一类规则。
+#
+# 为什么只选 E9 + F（而不是一次性开启全部规则）：
+# · E9  语法错误类（如未闭合字符串）—— 与 tests/test_sources_parse.py 互补，提前到编辑器/CI；
+# · F   pyflakes：未定义名字、未使用导入、重复定义、f-string 无占位符等**确定的问题**；
+# 其余风格类规则（行宽、引号、导入排序）会淹没真正的问题，需要时再单独评审开启。
+line-length = 120
+target-version = "py312"
+
+[lint]
+select = ["E9", "F"]
+exclude = [".venv", "__pycache__", "eval/out"]

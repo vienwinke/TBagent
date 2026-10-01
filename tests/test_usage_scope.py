@@ -16,7 +16,6 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import llm  # noqa: E402
 from agent import pipeline  # noqa: E402
-from agent.pipeline import Deps  # noqa: E402
 from agent.policy import Principal  # noqa: E402
 
 USER = Principal(user_id=7)

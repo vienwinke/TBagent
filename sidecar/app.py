@@ -35,7 +35,7 @@ from pydantic import BaseModel, Field
 
 import llm as llm_mod
 from config import LLM
-from agent import nl2sql, pipeline, policy
+from agent import pipeline, policy
 from sidecar import auth
 from agent.pipeline import Deps
 from agent.policy import Principal

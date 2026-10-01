@@ -17,7 +17,7 @@ import yaml
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from agent import executor, policy  # noqa: E402
+from agent import policy  # noqa: E402
 from config import IS_SQLITE  # noqa: E402
 from eval.run_eval import EVAL_PRINCIPAL, _live_reference, rows_hash  # noqa: E402
 

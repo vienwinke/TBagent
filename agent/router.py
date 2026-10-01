@@ -64,7 +64,6 @@ def route(question: str, *, classify_fn: Callable[[str], str] | None = None,
     if has_sql and not allow_raw_sql:
         # 不为这种输入调用模型、也不生成 SQL：直接走闲聊话术（确定性 + 零成本）
         return CHAT
-    has_data = has_agg or has_time or has_sql
     has_biz = re.search(BIZ_NOUNS, q) is not None
     has_kb = any(re.search(p, q, re.I) for p in KNOWLEDGE_STRONG)
 
