@@ -175,16 +175,37 @@ executor.execute_readonly(sql, *, max_rows=None, check_cost=True, row_limit=None
 llm.chat(...) / llm.chat_json(...)
 ```
 
-### 3.2 待建（⬜ 定稿后即为稳定接口）
+### 3.2 已实现（✅ 2026-10-01 起；FastAPI/SSE 包装仍待做）
 
 ```python
 # agent/pipeline.py —— 编排层：Streamlit 与 FastAPI 共用同一条链路
-answer_stream(question: str, principal: Principal, *,
-              session_id: str | None = None,
-              trace_id: str | None = None) -> Iterator[tuple[str, dict]]
+pipeline.answer_stream(question: str, principal: Principal, *,
+                       session_id: str | None = None,
+                       trace_id: str | None = None,
+                       history: str = "",
+                       deps: pipeline.Deps | None = None,
+                       execute: bool = True,
+                       top_k: int | None = None,
+                       use_cache: bool = True) -> Iterator[tuple[str, dict]]
 #   yield ("meta", {...}); yield ("scope", {...}); … yield ("done", {...})
-#   内部顺序：会话装载 → 指代消解 → 范围判定 → 路由 → 分支 → 事件
+#   事件顺序即 §2.3 的表序：meta → scope → route → sql → table → chart → delta
+#                            → citations → guard → done / error（delta 可多次）
+
+# 注入点：把"调哪个模型"从编排里拆出去，链路因此可以完全离线断言
+pipeline.Deps(nl2sql_llm=None, scope_llm=None, classify_llm=None,
+              rag_llm=None, summary_llm=None)
+pipeline.CHAT_REPLY        # 闲聊回复文案（Streamlit 与 SSE 共用同一句）
+pipeline.error_event(msg)  # 失败 → 契约 §2.4 的错误码
+
+# app.py 侧只是事件流的渲染适配器：handle(question, deps=None) -> item
+#   —— 编排逻辑不在 UI 里重复实现（本项目此前踩过"同一逻辑两份实现"的坑）
 ```
+
+**已落实的契约约束**：拒答（scope.allowed=False）只发 `delta + done`、**零模型调用**；
+`sql` 明文仅对运营及以上下发，普通用户只收 `has_sql:true`；失败走 `error` 事件（带 code/retryable）
+而不是异常穿透；`meta` 携带 `trace_id / prompt_version / policy_version / model`。
+
+> 仍待做（P0 的另一半）：FastAPI 包装 + SSE 输出 + `/healthz`。届时直接把同一份事件流转成 SSE 帧。
 
 ## 4. L4 · 数据契约
 

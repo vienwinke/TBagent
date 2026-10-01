@@ -8,17 +8,14 @@
 """
 from __future__ import annotations
 
-import time
-
 import altair as alt
 import pandas as pd
 import streamlit as st
 
 import llm as llm_mod
-from agent import answer as answer_mod
 from agent import chart as chart_mod
 from agent import nl2sql
-from agent import rag
+from agent import pipeline
 from agent import router
 from config import DB, GUARD, LLM, setup_logging
 
@@ -123,54 +120,60 @@ def render_chart(spec: chart_mod.ChartSpec, columns: list, rows: list) -> None:
     st.caption("选图依据：%s" % spec.reason)
 
 
-# ---------------- 单轮问答 ----------------
-def handle(question: str) -> dict:
-    started = time.time()
-    # 规则无法判定时交给 LLM 分类（只输出一个词，约 8 token）
-    intent = router.route(question, classify_fn=router.llm_classify)
-    item = {"question": question, "intent": intent}
+# ---------------- 单轮问答：只是 pipeline 事件流的渲染适配器 ----------------
+def handle(question: str, deps: pipeline.Deps | None = None) -> dict:
+    """把 (event, data) 事件流翻译成 render_item 需要的 item dict。
 
-    if intent == router.CHAT:
-        item.update(answer_text="我是你的 treatbord 助手：可以**查数据**（如「待接取的任务有几个？」），"
-                                "也可以**查业务规则**（如「任务有哪些状态？」）。",
-                    elapsed_ms=int((time.time() - started) * 1000))
-        return item
+    **编排逻辑不在这里** —— 路由、范围判定、分支、护栏提示全在 agent/pipeline.py。
+    Streamlit 与将来的 FastAPI 共用同一条链路：这边渲染事件，那边把同一份事件转成 SSE 帧。
+    这样才不会出现"两处实现各自漂移"（本项目已经吃过三次同类亏）。
+    """
+    # 单机演示 = 单机管理员（结果里 isolated=False 可见）；服务化必须换成 JWT 解析出的身份
+    principal = nl2sql.local_principal()
+    if deps is None:
+        deps = pipeline.Deps(scope_llm=nl2sql.default_scope_llm())
 
-    if intent == router.KNOWLEDGE:
-        before_kb = llm_mod.USAGE.summary().copy()
-        r = rag.answer(question)
-        after_kb = llm_mod.USAGE.summary()
-        item.update(answer_text=r.answer or ("⚠️ %s" % r.error),
-                    citations=r.citations, hits=r.hits, insufficient=r.insufficient,
-                    elapsed_ms=int((time.time() - started) * 1000),
-                    tokens=after_kb["total_tokens"] - before_kb.get("total_tokens", 0),
-                    cost=after_kb["cost_yuan"] - before_kb.get("cost_yuan", 0.0))
-        return item
+    item: dict = {"question": question, "guards": []}
+    answer_parts: list[str] = []
 
-    before = llm_mod.USAGE.summary().copy()
-    # 身份显式声明：单机演示 = 单机管理员（不做行级隔离，结果里 isolated=False 可见）。
-    # 嵌入服务化时这里必须换成从 JWT 解析出的 Principal（见 docs/treatbord嵌入-接口契约.md §2.2）。
-    r = nl2sql.answer(question, principal=nl2sql.local_principal(),
-                      scope_llm_fn=nl2sql.default_scope_llm())
-    after = llm_mod.USAGE.summary()
+    for event, data in pipeline.answer_stream(question, principal, deps=deps):
+        if event == "meta":
+            item.update(trace_id=data["trace_id"], model=data["model"],
+                        policy_version=data["policy_version"])
+        elif event == "scope":
+            item.update(scope=data["scope"], scope_reason=data["reason"])
+        elif event == "route":
+            item["intent"] = data["route"]
+        elif event == "sql":
+            item["sql"] = data.get("sql") or ""
+            item["has_sql"] = bool(data.get("sql") or data.get("has_sql"))
+            item["tables"] = data.get("tables") or []
+        elif event == "table":
+            item["query"] = {"columns": data["columns"], "row_count": data["row_count"],
+                             "truncated": data["truncated"],
+                             "masked_columns": data["masked_columns"]}
+            item["rows"] = [tuple(r) for r in data["rows"]]
+        elif event == "chart":
+            item["chart"] = data
+        elif event == "delta":
+            answer_parts.append(data["text"])
+        elif event == "citations":
+            item["citations"] = [c["title"] for c in data]
+            item["citation_items"] = data
+        elif event == "guard":
+            item["guards"].append(data)
+        elif event == "error":
+            item["error"] = "%s: %s" % (data.get("code"), data.get("message"))
+        elif event == "done":
+            item.update(elapsed_ms=data["elapsed_ms"], tokens=data["tokens"],
+                        cost=data["cost_yuan"], cache_tokens=data.get("cache_tokens", 0),
+                        attempts=data.get("attempts", 0), repaired=data.get("repaired", False),
+                        cache_hit=data.get("cache_hit", False), denied=data.get("denied", False),
+                        deny_reason=data.get("deny_reason"),
+                        insufficient=data.get("insufficient", False), stage=data.get("stage"))
 
-    item.update(sql=r.sql, guard=r.guard, query=r.query, rows=r.rows,
-                attempts=r.attempts, repaired=r.repaired, stage=r.stage, error=r.error,
-                tables=r.tables, scope=r.scope, scope_reason=r.scope_reason,
-                denied=r.denied, deny_reason=r.deny_reason,
-                elapsed_ms=int((time.time() - started) * 1000),
-                tokens=after["total_tokens"] - before.get("total_tokens", 0),
-                cache_tokens=after.get("cache_read_tokens", 0) - before.get("cache_read_tokens", 0),
-                cost=after["cost_yuan"] - before.get("cost_yuan", 0.0))
-    if r.ok:
-        item["answer_text"] = answer_mod.summarize(question, r.query.get("columns", []),
-                                                   [tuple(x.values()) for x in r.rows])
-    elif r.denied:
-        # 拒答是正常业务结果（越权/敏感/注入），不是"查询失败"：
-        # 给确定性话术 + 可问替代，别把内部原因或"未知错误"抛给用户
-        item["answer_text"] = r.deny_message()
-    else:
-        item["answer_text"] = "⚠️ 未能完成查询：%s" % (r.error or "未知错误")
+    item["answer_text"] = "\n".join(answer_parts) or (
+        "⚠️ 未能完成查询：%s" % (item.get("error") or "未知错误"))
     return item
 
 
@@ -189,10 +192,10 @@ def render_item(item: dict) -> None:
             st.caption(" · ".join(bits))
             if item.get("citations"):
                 with st.expander("引用来源（%d）" % len(item["citations"])):
-                    for c in item["citations"]:
-                        st.write("· " + c)
-                    for h in (item.get("hits") or [])[:4]:
-                        st.caption("【%s】%s" % (h["heading"], h["text"][:100].replace("\n", " ")))
+                    for c in (item.get("citation_items") or []):
+                        st.write("· " + c["title"])
+                        if c.get("snippet"):
+                            st.caption(c["snippet"].replace("\n", " ")[:120])
             return
         if item.get("denied"):
             # 拒答：既没有 SQL 也不该有表格。展示判定依据（可审计），但不泄露内部机制细节。
@@ -204,7 +207,7 @@ def render_item(item: dict) -> None:
             return
         q = item.get("query") or {}
         cols = q.get("columns") or []
-        rows = [tuple(x.values()) for x in (item.get("rows") or [])]
+        rows = item.get("rows") or []
         if rows:
             st.dataframe(pd.DataFrame(rows, columns=cols), use_container_width=True)
             spec = chart_mod.choose_spec(cols, rows, masked_columns=q.get("masked_columns") or ())
@@ -215,12 +218,17 @@ def render_item(item: dict) -> None:
             bits.append("✅ 回环修复成功")
         if item.get("cache_tokens"):
             bits.append("前缀缓存命中 %d tokens" % item["cache_tokens"])
-        if q.get("masked_columns"):
-            bits.append("🔒 已脱敏：%s" % ", ".join(q["masked_columns"]))
-        if q.get("truncated"):
-            bits.append("⚠️ 结果被截断到 %d 行" % GUARD.max_rows)
-        if item.get("guard", {}).get("limit_added"):
-            bits.append("已自动补 LIMIT")
+        if item.get("denied"):
+            bits.append("🛡 已按权限范围拒答")
+        # 护栏提示统一来自 pipeline 的 guard 事件（前端不需要理解内部机制）
+        for g in (item.get("guards") or []):
+            action = g.get("action")
+            if action == "limit_added":
+                bits.append("已自动补 LIMIT")
+            elif action == "masked":
+                bits.append("🔒 %s" % g.get("note", "已脱敏"))
+            elif action == "truncated":
+                bits.append("⚠️ %s" % g.get("note", "结果已截断"))
         st.caption(" · ".join(bits))
         if item.get("sql"):
             with st.expander("查看生成的 SQL"):

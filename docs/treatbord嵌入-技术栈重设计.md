@@ -241,7 +241,7 @@ ai_prompt_version(name VARCHAR(32), version VARCHAR(16), content MEDIUMTEXT,
 
 | 阶段 | 内容 | 验收 | 工时 |
 |---|---|---|---|
-| **P0 拆服务** | `app.py` 编排抽成 `agent/pipeline.py`；FastAPI 包装 `answer()`；SSE 输出；`/healthz` | 小程序（或 curl）能拿到流式答案，功能与 Streamlit 等价 | 6h |
+| **P0 拆服务** | ◐ **`agent/pipeline.py` 已完成**（2026-10-01：事件流 + 可注入 Deps + app.py 改为适配器，11 条离线测试）；剩 FastAPI 包装 + SSE 输出 + `/healthz` | 小程序（或 curl）能拿到流式答案，功能与 Streamlit 等价 | 6h（余 ~3h） |
 | **P1 身份 + 行级隔离** | 内部 JWT 校验；`agent/policy.py`；唯一出口改造；缓存键加权限维度；USER 关闭裸 SQL | **越权用例集 100% 拦截，泄漏 0** | 10h |
 | **P2 审计 + 限流** | `ai_*` 表；Redis 限流/配额/幂等；trace_id 贯穿；成本按用户归集 | 任意问题可按 trace_id 还原 SQL 与结果规模 | 6h |
 | **P3 多轮** | 会话装载 + 指代消解改写；追问建议 | "那他呢/再按周拆"类追问可用 | 6h |

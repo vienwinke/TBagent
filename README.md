@@ -68,6 +68,7 @@ streamlit run app.py                          # 打开 http://localhost:8501 提
 agent/        router 意图路由 · schema_index Schema 检索 · sql_guard 静态护栏 · executor 只读执行
               nl2sql 生成+回环 · chart 选图 · rag/kb 知识库 · answer 转述 · cache 缓存
               policy 行级隔离重写（已接线：SQL 唯一出口）· scope 语义层范围判定（已接线：拒答在生成之前）
+              pipeline 编排层（事件流；Streamlit 与将来的 FastAPI 共用同一条链路）
               prompts_user 嵌入版提示词包（已接线）
 eval/         cases.yaml 60 条用例 · kb_cases.yaml 知识库用例 · run_eval.py 跑分（--ablation 消融 / --kb 知识库）
               security_cases.yaml + security_suite.py 越权红线（离线，不连库、不需要 Key）
