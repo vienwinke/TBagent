@@ -120,3 +120,16 @@ data/         schema.json · schema_index.json · snapshot.sqlite · knowledge/ 
 - [x] M4 自动图表 + Streamlit 界面（`agent/chart.py` 选图规则 + `app.py`，含成本面板与护栏提示）
 - [x] M5 60 条评估集 + 跑分 + 消融（**EX 严格 90.2% / 宽松 94.1%**；危险操作执行率 0%；脱敏 100%）
 - [ ] M6 部署 + README 指标表 + 演示视频
+
+### 嵌入路线（treatbord 生产化）进度
+
+| 阶段 | 状态 |
+|---|---|
+| G1 SQL 唯一出口 · G2 语义层拒答 · G3 Schema 裁剪 | ✅ |
+| G4 编排层 `agent/pipeline.py`（事件流，UI 与服务层共用） | ✅ |
+| P0 拆服务：FastAPI + SSE + `/healthz` `/readyz` `/metrics` | ✅ |
+| P1 身份与收口：HS256 内部 JWT（算法锁定）· 行级隔离 · 缓存键带权限 · USER 关闭裸 SQL | ✅ |
+| P2 审计与限流 | ◐ 运行时契约已做（trace 透传 · 8s 预算与诚实降级 · 幂等 · 同 session 串行 · 并发上限 429）；**`ai_*` 审计表落库与 Redis 待做** |
+| P3 多轮指代消解 · P4 角色化运营版 · P5 上线加固 | ⬜ |
+
+> 验收门禁（CI 四道，全部退出码阻断）：`ruff check` → 密钥扫描 → 越权红线 54 条 → 回归 293 条。
