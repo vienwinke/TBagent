@@ -248,12 +248,15 @@ ai_prompt_version(name VARCHAR(32), version VARCHAR(16), content MEDIUMTEXT,
 | **P4 角色化与运营版** | ADMIN 分支（含 `audit_log`/`login_log`）；SQL 面板；指标看板 | 运营能看 SQL 与全库指标 | 6h |
 | **P5 上线加固** | 灰度、降级、压测、告警 | P95 ≤ 3s，错误率 < 1% | 6h |
 
-### 嵌入前必须先修的 4 个现有问题
+### 嵌入前必须先修的 4 个现有问题（**已于 2026-10-01 全部修复并逐项核验**）
 
-1. **`agent/cache.py` 缓存键不含身份** → 多用户下串号（P1 必须修，属安全缺陷）。
-2. **`config.py` 里 `_load_streamlit_secrets` 被重复定义了 5 次**（第 18/35/52/69/86 行），每次定义后立刻调用 → 删除重复；嵌入后应整体移除 Streamlit 依赖。
-3. **`agent/router.py` 第 108–115 行是不可达死代码**（第 107 行已 `return`，后面重复了一遍分类器逻辑）→ 删除。
-4. **`agent/prompts.py` 的 `DATE_FORMAT(create_time, '%%Y-%%m')` 会原样进提示词**（该串只经 `.replace()`，没走 `%` 格式化）→ 模型可能照抄，而 MySQL 里 `%%` 是字面 `%`，`DATE_FORMAT(x,'%%Y-%%m')` 返回 `%Y-%m` 字符串而非年月。改为单 `%`。
+1. ✅ **已修** `agent/cache.py` 缓存键不含身份 → 多用户下串号（P1 必须修，属安全缺陷）。
+   现状：`_key/get/put` 均带 `scope` = 角色 + 策略版本（`policy.cache_scope`）。
+2. ✅ **已修** `config.py` 里 `_load_streamlit_secrets` 重复定义 5 次 → 现状只剩 1 处定义 + 1 处调用。
+   （"嵌入后整体移除 Streamlit 依赖"这一条仍未做，属 P0 拆服务范围）
+3. ✅ **已修** `agent/router.py` 第 108–115 行不可达死代码 → 已删除，文件 126 行，无 `return` 后代码。
+4. ✅ **已修** `agent/prompts.py` 的 `DATE_FORMAT(create_time, '%%Y-%%m')` → 已改为单 `%`（第 44 行）；
+   `prompts_user.domain_rules()` 也做了同样的 `%% → %` 归一。
 
 ## 8. 测试与评估（红线）
 
