@@ -32,9 +32,11 @@
 ### 2.1 端点
 
 状态（2026-10-01）：✅ 已实现并测试 · ⬜ 待做（会话/审计属 P2）
-身份校验（§2.2 JWT）**尚未实现** —— 因此 `/v1/ai/chat` 目前 **fail-closed：返回 503**，
-除非显式配置开发身份 `SIDECAR_DEV_PRINCIPAL=7:USER`（仅本地联调）。
-理由：在鉴权落地前提供问答，等于开一个"任何人都能以管理员身份查库"的接口。
+
+**鉴权已实现**（HS256 内部 JWT，标准库实现，见 `sidecar/auth.py`）。启用方式：
+配置 `SIDECAR_JWT_SECRET`（与 treatbord 侧同一密钥）后，`/v1/ai/chat` 只认
+`Authorization: Bearer <内部JWT>`；**未配置密钥时仍 fail-closed 返回 503**，
+本地联调可临时用 `SIDECAR_DEV_PRINCIPAL=7:USER`（配了密钥就只认 JWT，开发身份自动失效）。
 
 | 方法 | 路径 | 请求 | 响应 | 状态 |
 |---|---|---|---|---|
@@ -59,7 +61,9 @@
 | `sub` | user_id，**正整数**；边车侧 `Principal` 对字符串/0/负数直接 `ValueError` |
 | `role` | `USER` / `OPERATOR` / `ADMIN` 三档 |
 | `exp` | ≤ 5 分钟；管理员降权后旧 token 最长 5 分钟内仍有效 → 要即时生效就把 `jti` 放 Redis 黑名单 |
-| 其他 | **不接受任何客户端自带的 `user_id` 字段或 `X-User-Id` 头**；边车启动时断言请求 schema 里不存在该字段 |
+| 其他 | **不接受任何客户端自带的 `user_id` 字段或 `X-User-Id` 头**；边车启动时断言请求 schema 里不存在该字段（`_assert_no_identity_fields()`） |
+| 实现状态 | ✅ 已实现（`sidecar/auth.py`）：**算法锁定只认 HS256**（拒绝 `alg=none` 与 RS256→HS256 混淆）、签名常量时间比较、`sub` 必须正整数、`role` 限三档、`aud` 必须含 `ai-sidecar`、`exp` 未过期且**签发时长 ≤ 5 分钟**、`iat` 不在未来（5s 时钟容差）；失败按 §2.4 返回 401 `UNAUTHENTICATED` |
+| 已知缺口 | `jti` 黑名单（即时降权）**未做** —— 降权后旧 token 最长仍有效 5 分钟（P2 随 Redis 一起做） |
 
 ### 2.3 SSE 事件
 

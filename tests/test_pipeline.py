@@ -164,3 +164,41 @@ def test_app_handle_renders_deny_text():
     assert item["denied"] is True and item["scope"] == "SENSITIVE"
     assert "安全中心" in item["answer_text"]
     assert "未知错误" not in item["answer_text"]
+
+
+# ------------------------------------------------------------------ 裸 SQL 入口收口（P1）
+def test_raw_sql_entry_closed_for_user_without_calling_classifier():
+    """普通用户直写 SQL：不生成、不查库，也不为这种输入花一次分类调用"""
+    calls = []
+
+    def classify(question):
+        calls.append(question)
+        return router.DATA
+
+    assert router.route("select * from user", classify_fn=classify) == router.DATA
+    assert router.route("select * from user", classify_fn=classify,
+                        allow_raw_sql=False) == router.CHAT
+    assert calls == [], "裸 SQL 由规则直接判定：开/关入口都不该调用分类器"
+
+
+def test_normal_questions_unaffected_by_raw_sql_gating():
+    assert router.route("我接了几个任务", allow_raw_sql=False) == router.DATA
+    assert router.route("任务有哪些状态？", allow_raw_sql=False) == router.KNOWLEDGE
+
+
+def test_pipeline_closes_raw_sql_for_user():
+    calls = []
+
+    def counting_llm(messages):
+        calls.append(1)
+        return GOOD
+
+    evs = run("select * from user", USER, deps=Deps(nl2sql_llm=counting_llm))
+    assert payload(evs, "route")[0]["route"] == router.CHAT
+    assert "sql" not in names(evs) and calls == []
+
+
+def test_pipeline_keeps_raw_sql_for_privileged():
+    evs = run("select * from task limit 5", ADMIN, deps=NL2SQL_DEPS, use_cache=False)
+    assert payload(evs, "route")[0]["route"] == router.DATA
+    assert payload(evs, "sql")[0]["sql"]

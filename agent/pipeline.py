@@ -148,7 +148,9 @@ def _answer_stream(question: str, principal: Principal, *,
         return
 
     # 2) 路由（chat / knowledge / data）
-    route = router.route(question, classify_fn=deps.classify_llm or router.llm_classify)
+    # 普通用户关闭"直接输入 SQL"入口（设计文档 §5.3）；运营及以上保留
+    route = router.route(question, classify_fn=deps.classify_llm or router.llm_classify,
+                         allow_raw_sql=principal.is_privileged)
     yield "route", {"route": route}
 
     if route == router.CHAT:

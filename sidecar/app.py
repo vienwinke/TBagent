@@ -34,6 +34,7 @@ from pydantic import BaseModel, Field
 
 from config import LLM
 from agent import nl2sql, pipeline, policy
+from sidecar import auth
 from agent.pipeline import Deps
 from agent.policy import Principal
 
@@ -42,7 +43,9 @@ app = FastAPI(title="treatbord AI 边车", version="0.1.0")
 # 可注入的模型函数：测试注入桩即可完全离线；服务化时换成带租户配额与追踪的封装
 DEPS: Deps | None = None
 
-SIDECAR_AUTH_CONFIGURED = bool(os.getenv("SIDECAR_JWT_SECRET", "").strip())
+def auth_configured() -> bool:
+    """是否已配置 JWT 密钥（动态读取：部署时注入环境变量即可，不必改代码）"""
+    return bool(os.getenv("SIDECAR_JWT_SECRET", "").strip())
 
 
 class _Stats:
@@ -81,21 +84,45 @@ class ChatRequest(BaseModel):
     client_msg_id: str | None = None
 
 
-def principal_from_request(request: Request) -> Principal | None:
-    """从请求构造身份；无法确认身份时返回 None（调用方据此 fail-closed）。
+def _assert_no_identity_fields() -> None:
+    """契约 §2.2：启动时断言请求 schema 里不存在任何身份字段"""
+    banned = {"user_id", "userId", "uid", "role"}
+    extra = set(ChatRequest.model_fields) & banned
+    if extra:
+        raise RuntimeError("请求 schema 不得包含身份字段：%s" % ", ".join(sorted(extra)))
 
-    P1 落地方式：校验 `Authorization: Bearer <内部JWT>`（HS256，aud=ai-sidecar，
-    sub 必须是正整数），失败直接 401 UNAUTHENTICATED。当前只有开发身份。
+
+def principal_from_request(request: Request) -> Principal:
+    """从请求构造身份；无法确认身份时抛 AuthError（调用方按契约 §2.4 映射状态码）。
+
+    优先级是**故意的 fail-safe**：
+      · 配置了 SIDECAR_JWT_SECRET → **只认 JWT**，开发身份一律忽略
+        （避免生产环境里残留的 SIDECAR_DEV_PRINCIPAL 变成后门）；
+      · 未配置密钥 → 仅开发身份可用；两者都没有 → AuthError(AUTH_NOT_CONFIGURED)。
+    身份只来自 Authorization 头：请求体里的 user_id 根本没有对应字段（启动时已断言）。
     """
+    secret = os.getenv("SIDECAR_JWT_SECRET", "").strip()
+    if secret:
+        if os.getenv("SIDECAR_DEV_PRINCIPAL", "").strip():
+            logger.warning("[sidecar] 同时配置了 JWT 密钥与开发身份：以 JWT 为准，开发身份被忽略")
+        return auth.principal_from_bearer(request.headers.get("authorization"), secret=secret)
+
     dev = os.getenv("SIDECAR_DEV_PRINCIPAL", "").strip()
-    if not dev:
-        return None
-    try:
+    if dev:
         uid, _, role = dev.partition(":")
-        return Principal(user_id=int(uid), role=(role or "USER").upper())
-    except (TypeError, ValueError):
-        logger.error("[sidecar] SIDECAR_DEV_PRINCIPAL 格式错误（应为 7:USER）：{}", dev)
-        return None
+        try:
+            return Principal(user_id=int(uid), role=(role or "USER").upper())
+        except (TypeError, ValueError) as exc:
+            logger.error("[sidecar] SIDECAR_DEV_PRINCIPAL 格式错误（应为 7:USER）：{}", dev)
+            raise auth.AuthError("SIDECAR_DEV_PRINCIPAL 格式错误（应为 7:USER）") from exc
+
+    raise auth.AuthError(
+        "边车尚未配置身份校验（P1 未完成）：请配置 SIDECAR_JWT_SECRET，"
+        "或在本地联调时设置 SIDECAR_DEV_PRINCIPAL=7:USER",
+        code="AUTH_NOT_CONFIGURED")
+
+
+_assert_no_identity_fields()      # 启动即断言（契约 §2.2）
 
 
 def _sse(event: str, data: dict[str, Any]) -> str:
@@ -121,16 +148,14 @@ def _stream(question: str, principal: Principal, session_id: str) -> Iterator[st
 
 @app.post("/v1/ai/chat")
 def chat(req: ChatRequest, request: Request) -> Any:
-    principal = principal_from_request(request)
-    if principal is None:
-        # fail-closed：宁可不可用，也不能开一个"谁都能以管理员身份查库"的口子
-        return JSONResponse(
-            status_code=503,
-            content={"code": "AUTH_NOT_CONFIGURED",
-                     "message": "边车尚未配置身份校验（P1 未完成）：请配置 SIDECAR_JWT_SECRET，"
-                                "或在本地联调时设置 SIDECAR_DEV_PRINCIPAL=7:USER",
-                     "retryable": False},
-        )
+    try:
+        principal = principal_from_request(request)
+    except auth.AuthError as exc:
+        # 契约 §2.4：缺/坏/过期 JWT → 401 UNAUTHENTICATED；密钥没配 → 503（fail-closed）
+        status = 503 if exc.code == "AUTH_NOT_CONFIGURED" else 401
+        logger.info("[sidecar] 拒绝请求：{}（{}）", exc.code, exc)
+        return JSONResponse(status_code=status,
+                            content={"code": exc.code, "message": str(exc), "retryable": False})
     return StreamingResponse(_stream(req.question, principal, req.session_id),
                              media_type="text/event-stream",
                              headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
@@ -157,7 +182,7 @@ def readyz() -> dict[str, Any]:
             "db_readonly": readonly,
             "db": db,
             "policy_version": policy.POLICY_VERSION,
-            "auth_configured": SIDECAR_AUTH_CONFIGURED,
+            "auth_configured": auth_configured(),
             "dev_principal": bool(os.getenv("SIDECAR_DEV_PRINCIPAL", "").strip())}
 
 
@@ -170,7 +195,7 @@ def metrics() -> Any:
         "# TYPE tb_policy_version_info gauge",
         'tb_policy_version_info{version="%s"} 1' % policy.POLICY_VERSION,
         "# TYPE tb_auth_configured gauge",
-        "tb_auth_configured %d" % int(SIDECAR_AUTH_CONFIGURED),
+        "tb_auth_configured %d" % int(auth_configured()),
         "# TYPE tb_requests_total counter",
         "tb_requests_total %d" % STATS.requests,
         "# TYPE tb_requests_denied_total counter",
@@ -198,7 +223,7 @@ def main() -> None:
 
     host = os.getenv("SIDECAR_HOST", "127.0.0.1")
     port = int(os.getenv("SIDECAR_PORT", "8080") or 8080)
-    if not SIDECAR_AUTH_CONFIGURED and host not in ("127.0.0.1", "localhost"):
+    if not auth_configured() and host not in ("127.0.0.1", "localhost"):
         logger.warning("[sidecar] 未配置 SIDECAR_JWT_SECRET 却绑定 {}：/v1/ai/chat 会一律 503，"
                        "请先完成 P1 的鉴权再对外暴露", host)
     uvicorn.run(app, host=host, port=port)

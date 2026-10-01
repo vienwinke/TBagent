@@ -46,7 +46,14 @@ KNOWLEDGE_STRONG = [
 BIZ_NOUNS = r"(任务|用户|接取|结算|举报|通知|评价|赏金|信用分|文件|审核|登录|审计|配置|权限|隐私)"
 
 
-def route(question: str, *, classify_fn: Callable[[str], str] | None = None) -> str:
+def route(question: str, *, classify_fn: Callable[[str], str] | None = None,
+          allow_raw_sql: bool = True) -> str:
+    """意图路由。
+
+    allow_raw_sql=False 用于普通用户：**关闭"直接输入 SQL"入口**（设计文档 §5.3）。
+    理由：对普通用户来说 `select * from ...` 这类输入是白白扩大的攻击面与成本，
+    而且他们本来也不需要手写 SQL。运营及以上保留该入口（排查/核查要用）。
+    """
     q = (question or "").strip()
     if not q:
         return CHAT
@@ -54,6 +61,9 @@ def route(question: str, *, classify_fn: Callable[[str], str] | None = None) -> 
     has_agg = any(re.search(p, q, re.I) for p in AGG_HINTS)
     has_time = any(re.search(p, q, re.I) for p in TIME_HINTS)
     has_sql = any(re.search(p, q, re.I) for p in SQL_HINTS)
+    if has_sql and not allow_raw_sql:
+        # 不为这种输入调用模型、也不生成 SQL：直接走闲聊话术（确定性 + 零成本）
+        return CHAT
     has_data = has_agg or has_time or has_sql
     has_biz = re.search(BIZ_NOUNS, q) is not None
     has_kb = any(re.search(p, q, re.I) for p in KNOWLEDGE_STRONG)
