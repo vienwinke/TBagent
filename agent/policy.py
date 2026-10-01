@@ -442,4 +442,4 @@ def execute(rewritten: RewrittenSql, **kwargs):
         raise TypeError("必须传入 policy.rewrite() 的返回值：SQL 不得绕过重写层直接执行")
     from agent import executor as ex
 
-    return ex.execute_readonly(rewritten.sql, **kwargs)
+    return ex.execute_readonly(rewritten, **kwargs)      # ★ 传对象而不是解包成字符串

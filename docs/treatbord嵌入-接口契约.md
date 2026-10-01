@@ -181,7 +181,9 @@ nl2sql.answer(question, *, principal: Principal | None = None, llm_fn=None,
 router.route(question, *, classify_fn=None) -> "chat" | "knowledge" | "data"
 rag.answer(question, *, top_k=None, llm_fn=None, kb=None) -> RagResult
 cache.SqlCache.get(question, top_k=None, *, scope="") / .put(question, sql, *, tables=None, top_k=None, scope="")
-executor.execute_readonly(sql, *, max_rows=None, check_cost=True, row_limit=None) -> QueryResult
+executor.execute_readonly(rewritten: policy.RewrittenSql, *, max_rows=None,
+                             check_cost=True, row_limit=None) -> QueryResult
+#   ★ 只接受 RewrittenSql（裸字符串 TypeError）—— 见 §6 决策 B
 llm.chat(...) / llm.chat_json(...)
 ```
 
@@ -248,5 +250,5 @@ python scripts/prepublish_check.py --secrets-only
 | # | 待定 | 影响 |
 |---|---|---|
 | A | ~~单机 `principal=None` 的语义~~ **已定**：按「单机管理员」处理（不做行级隔离），但 `Nl2SqlResult.isolated=False` + 首次使用时告警；服务层必须显式传 principal | 已实现 |
-| B | `executor.execute_readonly` 是否加硬约束（只接受 `RewrittenSql`） | 决定 `policy.execute` 是否成为**唯一**入口 |
+| B | ~~`executor.execute_readonly` 是否加硬约束~~ **已定并已实现**（2026-10-01）：只接受 `policy.RewrittenSql`，裸字符串一律 `TypeError`；`policy.execute` 是唯一入口。内部诊断脚本也改走 `policy.rewrite()`（见 `scripts/smoke_sqlite.py`） | 唯一出口从"约定 + 源码守卫"升级为**类型约束**，新增代码路径绕不过去 |
 | C | **已查明**（不再是"待定"，是待执行的安全动作）：`26bc0b2` 把一把真实密钥（`user_…` 形态，非 `sk-` 前缀）写进 `.env.example`，随 `origin/内嵌` 推上远端；两侧远端 **tip 已干净**，但**历史可完整取回**。本机 `main` 分支 tip 仍带明文。仓库侧扫描器本可命中该形态（是没人跑，不是规则漏），现已接进 pre-commit。**待你执行**：① 供应商侧确认吊销旧值；② 决定公开历史是否重写 | 安全收尾 |

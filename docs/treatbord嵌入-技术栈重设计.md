@@ -182,7 +182,7 @@ USER_DENY = {"audit_log", "login_log", "app_config"}
 
 这是整个安全模型成立的前提。实现约束：
 
-- `executor.execute_readonly` 改为不再接收裸 SQL，只接受 `RewrittenSql`（由 policy 产出的不可伪造类型）。
+- ✅ **已实现（2026-10-01）**：`executor.execute_readonly` 不再接收裸 SQL，只接受 `RewrittenSql`（裸字符串直接 `TypeError`）；`policy.execute` 传对象而不是解包成字符串。测试与诊断脚本（`tests/test_masking.py`、`scripts/smoke_sqlite.py`）均已改走唯一出口。
 - `agent/cache.py` 的键改为 `hash(question_norm, top_k, role, POLICY_VERSION)`，**存重写前的 SQL**，每次请求重新重写；否则用户 A 缓存的 SQL 会被用户 B 复用（现实现就是 `question+top_k`）。
 - USER 角色**关闭"直接输入 SQL"入口**（现在 `router.py` 的 `SQL_HINTS` 会把 `select ...` 判成 data 并交给模型——对普通用户是白白扩大的攻击面）。
 

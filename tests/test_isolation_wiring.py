@@ -177,3 +177,28 @@ def test_no_bypass_left_in_model_and_eval_paths():
         src = (root / rel).read_text(encoding="utf-8")
         for pat in banned:
             assert pat not in src, "%s 里仍有绕过唯一出口的调用：%s" % (rel, pat)
+
+
+# ---------------------------------------------------------------- 类型约束（决策 B）
+def test_executor_rejects_raw_sql_strings():
+    """唯一出口的**硬保证**：executor 只接受 policy.RewrittenSql。
+
+    在此之前"所有 SQL 必须过 policy.rewrite"只是约定 + 源码正则守卫
+    （只扫 nl2sql 与 run_eval 两个文件）—— 新增一条路径就能绕过。
+    现在拿裸字符串直接 TypeError，绕过在类型层面就不可行。
+    """
+    import pytest
+
+    with pytest.raises(TypeError) as exc:
+        ex.execute_readonly("SELECT 1")
+    assert "RewrittenSql" in str(exc.value) and "policy.rewrite" in str(exc.value)
+
+
+def test_executor_accepts_rewritten_sql():
+    """走唯一出口就能正常执行（ADMIN 身份不加行过滤）"""
+    from agent.policy import ROLE_ADMIN, Principal
+
+    rw = policy.rewrite("SELECT COUNT(*) AS c FROM task WHERE deleted = 0",
+                        Principal(user_id=1, role=ROLE_ADMIN))
+    qr = ex.execute_readonly(rw, check_cost=False)
+    assert qr.row_count == 1

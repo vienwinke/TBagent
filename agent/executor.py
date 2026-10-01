@@ -200,13 +200,28 @@ def mask_rows(columns: Sequence[str], rows: Iterable[Sequence[Any]],
 
 
 def execute_readonly(
-    sql: str,
+    rewritten: Any,
     *,
     max_rows: int | None = None,
     check_cost: bool = True,
     row_limit: int | None = None,
 ) -> QueryResult:
-    """执行一条只读 SQL，返回结果 + 元信息；任何写操作/超限都会被拒绝"""
+    """执行一条**已重写**的只读 SQL（只接受 policy.RewrittenSql）。
+
+    为什么改成类型约束（契约 §6 决策 B）：在此之前"所有 SQL 必须过 policy.rewrite"
+    只是**约定 + 源码守卫测试**（一个正则扫 nl2sql/run_eval 里有没有直连）——
+    新增一条代码路径就能绕过。现在拿裸字符串一律 TypeError，
+    唯一出口从"我们记得这么做"变成"不这么做就跑不起来"。
+    内部诊断脚本需要直连时，也必须先过 policy.rewrite（见 scripts/smoke_sqlite.py）。
+    """
+    from agent.policy import RewrittenSql      # 延迟导入：policy 依赖本模块，模块级会成环
+
+    if not isinstance(rewritten, RewrittenSql):
+        raise TypeError(
+            "execute_readonly 只接受 policy.RewrittenSql（收到 %s）。"
+            "所有 SQL 必须经 policy.rewrite() 产出 —— 见 docs/treatbord嵌入-接口契约.md §5.3"
+            % type(rewritten).__name__)
+    sql = rewritten.sql
     limit = max_rows or GUARD.max_rows
     started = time.time()
     result = QueryResult(sql=sql)
