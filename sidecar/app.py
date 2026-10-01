@@ -35,6 +35,7 @@ from pydantic import BaseModel, Field
 
 import llm as llm_mod
 from config import LLM
+from agent import audit as audit_mod
 from agent import pipeline, policy
 from sidecar import auth
 from agent.pipeline import Deps
@@ -244,10 +245,13 @@ def _stream(req: ChatRequest, principal: Principal, trace_id: str | None, idem_k
         with LIMITER.session_lock(req.session_id):        # 契约 §0：同 session 串行
             chunks.append(": connected\n\n")     # 首字节：尽早给前端反馈
             yield chunks[-1]                    # 也进幂等缓冲，重放才能逐字节一致
-            for event, data in pipeline.answer_stream(req.question, principal,
-                                                      session_id=req.session_id,
-                                                      trace_id=trace_id,
-                                                      deps=_deps_for(budget_s)):
+            for event, data in pipeline.answer_stream(
+                    req.question, principal,
+                    session_id=req.session_id,
+                    trace_id=trace_id,
+                    deps=_deps_for(budget_s),
+                    # 审计落库（AUDIT_ENABLED，默认关闭）：sink 抛异常不影响问答，见 agent/audit.py
+                    audit_sink=audit_mod.record if audit_mod.enabled() else None):
                 if event == "done":
                     denied = bool(data.get("denied"))
                     tokens, cost = int(data.get("tokens", 0)), float(data.get("cost_yuan", 0.0))
@@ -334,6 +338,8 @@ def readyz() -> dict[str, Any]:
             "db": db,
             "policy_version": policy.POLICY_VERSION,
             "auth_configured": auth_configured(),
+            "audit_enabled": audit_mod.enabled(),
+            "audit": audit_mod.stats(),
             "dev_principal": bool(os.getenv("SIDECAR_DEV_PRINCIPAL", "").strip())}
 
 
