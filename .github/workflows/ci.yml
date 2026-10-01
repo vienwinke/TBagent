@@ -1,0 +1,38 @@
+name: CI
+
+# 为什么要有它：本仓库的三道门禁（密钥扫描 / 越权红线 / 回归测试）在 2026-10 之前
+# 全靠手动执行 —— 结果是 scripts/prepublish_check.py 存在了两周都没人跑，
+# 期间一把真实密钥被提交进 .env.example 并推上远端历史。
+# 门禁只有挂在流程上才算门禁；本地钩子（.githooks）还需要每个克隆手动配置，CI 不需要。
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  gates:
+    name: 门禁（离线可跑，无需 Key / 无需 MySQL）
+    runs-on: ubuntu-latest
+    env:
+      # 公开演示快照 data/snapshot.sqlite 随仓库分发，CI 不需要起 MySQL
+      DB_BACKEND: sqlite
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: 安装依赖
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements-dev.txt
+
+      - name: 密钥门禁（命中即阻断）
+        run: python scripts/prepublish_check.py --secrets-only
+
+      - name: 越权红线（离线：不连库、不需要 API Key）
+        run: python -m eval.security_suite
+
+      - name: 单元 / 集成回归
+        run: python -m pytest -q

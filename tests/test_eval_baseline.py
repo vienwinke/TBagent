@@ -18,22 +18,29 @@ import yaml
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from agent import executor, policy  # noqa: E402
+from config import IS_SQLITE  # noqa: E402
 from eval.run_eval import EVAL_PRINCIPAL, _live_reference, rows_hash  # noqa: E402
 
 CASES = yaml.safe_load(Path("eval/cases.yaml").read_text(encoding="utf-8"))["cases"]
 TIME_CASE = next(c for c in CASES if c["id"] == "time-02")
+
+# 参考 SQL 是 MySQL 方言（DATE_SUB/CURDATE/INTERVAL 7 DAY），sqlite 快照后端跑不了 ——
+# 评估本身也只在 mysql 后端跑；这两条用例按后端跳过，否则 CI（sqlite）会误红。
+needs_mysql = pytest.mark.skipif(IS_SQLITE, reason="参考 SQL 为 MySQL 方言，需 DB_BACKEND=mysql")
 
 
 def _hash_of(sql: str) -> str:
     return rows_hash(policy.execute(policy.rewrite(sql, EVAL_PRINCIPAL), check_cost=False).rows)
 
 
+@needs_mysql
 def test_live_reference_matches_current_execution():
     rows, digest = _live_reference(TIME_CASE)
     assert rows, "时间题在当前库上应有结果"
     assert digest == _hash_of(TIME_CASE["reference_sql"]), "实时基准必须等于当场执行参考 SQL 的结果"
 
 
+@needs_mysql
 def test_live_reference_ignores_stale_stored_hash():
     """存档 hash 过期时，判定不能再用它 —— 否则等于给该题钉死上限"""
     stale = dict(TIME_CASE, expected={"hash": "deadbeef" * 8})
@@ -41,6 +48,7 @@ def test_live_reference_ignores_stale_stored_hash():
     assert digest and digest != "deadbeef" * 8, "必须用实时执行的哈希，而不是存档值"
 
 
+@needs_mysql
 def test_reference_matches_itself_so_a_perfect_model_scores_hit():
     """不变量：模型若产出与参考等价的 SQL，实时判定必须给 EX_HIT"""
     _, ref_digest = _live_reference(TIME_CASE)
