@@ -189,7 +189,7 @@ def answer(
     服务层要开兜底，就显式传 `scope_llm_fn=nl2sql._default_llm_fn`。
     """
     call_llm = llm_fn or _default_llm_fn
-    usage_before = llm_mod.USAGE.summary()
+    usage_before = llm_mod.usage().summary()
     res = Nl2SqlResult(question=question)
     if principal is None:
         principal = _local_principal()
@@ -199,7 +199,7 @@ def answer(
 
     def _finish(r: Nl2SqlResult) -> Nl2SqlResult:
         """统一收尾：无论从哪条路径返回，用量与 repaired 都要结算（早期 return 曾漏掉过）"""
-        after = llm_mod.USAGE.summary()
+        after = llm_mod.usage().summary()
         r.usage = {k: after[k] - usage_before.get(k, 0)
                    for k in ("calls", "prompt_tokens", "completion_tokens", "total_tokens", "retries")}
         r.repaired = r.attempts > 1 and r.ok

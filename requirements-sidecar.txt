@@ -1,0 +1,4 @@
+# AI 边车（P0/G5）：FastAPI + uvicorn
+# 只给服务化用；Streamlit 演示部署走 requirements.txt，不需要这些
+fastapi>=0.115
+uvicorn>=0.30

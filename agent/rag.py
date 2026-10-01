@@ -81,7 +81,7 @@ def answer(question: str, *, top_k: int | None = None, llm_fn: LlmFn | None = No
            kb: KnowledgeBase | None = None) -> RagResult:
     call = llm_fn or _default_llm_fn
     res = RagResult(question=question)
-    usage_before = llm_mod.USAGE.summary()
+    usage_before = llm_mod.usage().summary()
 
     try:
         kb = kb or KnowledgeBase()
@@ -112,7 +112,7 @@ def answer(question: str, *, top_k: int | None = None, llm_fn: LlmFn | None = No
     except Exception as exc:  # noqa: BLE001
         res.error = "生成答案失败: %s: %s" % (type(exc).__name__, str(exc)[:120])
 
-    after = llm_mod.USAGE.summary()
+    after = llm_mod.usage().summary()
     res.usage = {k: after[k] - usage_before.get(k, 0)
                  for k in ("calls", "prompt_tokens", "completion_tokens", "total_tokens")}
     return res

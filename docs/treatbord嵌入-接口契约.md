@@ -31,16 +31,21 @@
 
 ### 2.1 端点
 
-| 方法 | 路径 | 请求 | 响应 |
-|---|---|---|---|
-| POST | `/v1/ai/chat` | `{session_id, question, client_msg_id}` | `text/event-stream`（§2.3） |
-| GET | `/v1/ai/sessions` | `?limit=20` | `[{id, title, updated_at}]` |
-| GET | `/v1/ai/sessions/{id}/messages` | — | `[{role, content, payload, created_at}]` |
-| DELETE | `/v1/ai/sessions/{id}` | — | `204` |
-| POST | `/v1/ai/feedback` | `{message_id, rating(1/-1), comment?}` | `204` |
-| GET | `/healthz` | — | `{status:"ok"}`（进程存活） |
-| GET | `/readyz` | — | `{status, llm_configured, db_readonly, policy_version}` |
-| GET | `/metrics` | — | Prometheus 文本 |
+状态（2026-10-01）：✅ 已实现并测试 · ⬜ 待做（会话/审计属 P2）
+身份校验（§2.2 JWT）**尚未实现** —— 因此 `/v1/ai/chat` 目前 **fail-closed：返回 503**，
+除非显式配置开发身份 `SIDECAR_DEV_PRINCIPAL=7:USER`（仅本地联调）。
+理由：在鉴权落地前提供问答，等于开一个"任何人都能以管理员身份查库"的接口。
+
+| 方法 | 路径 | 请求 | 响应 | 状态 |
+|---|---|---|---|---|
+| POST | `/v1/ai/chat` | `{session_id, question, client_msg_id}` | `text/event-stream`（§2.3） | ✅ |
+| GET | `/v1/ai/sessions` | `?limit=20` | `[{id, title, updated_at}]` | ⬜ |
+| GET | `/v1/ai/sessions/{id}/messages` | — | `[{role, content, payload, created_at}]` | ⬜ |
+| DELETE | `/v1/ai/sessions/{id}` | — | `204` | ⬜ |
+| POST | `/v1/ai/feedback` | `{message_id, rating(1/-1), comment?}` | `204` | ⬜ |
+| GET | `/healthz` | — | `{status:"ok"}`（进程存活） | ✅ |
+| GET | `/readyz` | — | `{status, llm_configured, db_readonly, policy_version, auth_configured}` | ✅ |
+| GET | `/metrics` | — | Prometheus 文本（请求数 / 拒绝数 / tokens / 成本） | ✅ |
 
 ### 2.2 JWT claims
 

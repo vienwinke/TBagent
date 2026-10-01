@@ -57,7 +57,7 @@ class Deps:
 
 
 def _usage_delta(before: dict[str, Any]) -> dict[str, Any]:
-    after = llm_mod.USAGE.summary()
+    after = llm_mod.usage().summary()
     return {
         "tokens": after["total_tokens"] - before.get("total_tokens", 0),
         "cost_yuan": round(after["cost_yuan"] - before.get("cost_yuan", 0.0), 6),
@@ -106,11 +106,30 @@ def answer_stream(question: str, principal: Principal, *,
                   execute: bool = True,
                   top_k: int | None = None,
                   use_cache: bool = True) -> Iterator[Event]:
-    """跑完整条链路并逐个产出事件（契约 §3.2 的 answer_stream）。"""
+    """跑完整条链路并逐个产出事件（契约 §3.2 的 answer_stream）。
+
+    每次调用自带**请求级用量作用域**：并发请求（服务化后）各自的 tokens/成本互不污染，
+    done 事件里的数字才是本请求的真实用量。作用域可重入，服务层再包一层也不会把用量吞掉。
+    """
+    with llm_mod.isolated_usage():
+        yield from _answer_stream(question, principal, session_id=session_id, trace_id=trace_id,
+                                  history=history, deps=deps, execute=execute, top_k=top_k,
+                                  use_cache=use_cache)
+
+
+def _answer_stream(question: str, principal: Principal, *,
+                   session_id: str | None = None,
+                   trace_id: str | None = None,
+                   history: str = "",
+                   deps: Deps | None = None,
+                   execute: bool = True,
+                   top_k: int | None = None,
+                   use_cache: bool = True) -> Iterator[Event]:
+    """编排实现体（由 answer_stream 包上用量作用域后调用）。"""
     deps = deps or Deps()
     trace = trace_id or uuid.uuid4().hex
     started = time.time()
-    before = llm_mod.USAGE.summary()
+    before = llm_mod.usage().summary()
 
     yield "meta", {"trace_id": trace, "session_id": session_id,
                    "prompt_version": prompts_user.PROMPT_VERSION,
@@ -168,9 +187,11 @@ def answer_stream(question: str, principal: Principal, *,
         return
 
     if r.sql:
-        # §2.3：SQL 明文仅 ADMIN 下发；USER 只收 has_sql
+        # §2.3：SQL 明文仅 ADMIN 下发；USER 只收 has_sql。
+        # tables = **SQL 实际引用的表**（紧邻 sql，供运营核查）；retrieved = Schema 检索命中的 Top-K。
         if principal.is_privileged:
-            yield "sql", {"sql": r.sql, "tables": list(r.tables)}
+            yield "sql", {"sql": r.sql, "tables": list(r.guard.get("tables") or []),
+                          "retrieved": list(r.tables)}
         else:
             yield "sql", {"has_sql": True}
 

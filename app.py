@@ -73,7 +73,7 @@ def sidebar() -> None:
             st.write("model: `%s`" % LLM.model)
             st.write("db: `%s`" % DB.label)
         st.divider()
-        s = llm_mod.USAGE.summary()
+        s = llm_mod.usage().summary()
         st.caption("本次会话用量")
         c1, c2 = st.columns(2)
         c1.metric("调用次数", s["calls"])
@@ -147,7 +147,8 @@ def handle(question: str, deps: pipeline.Deps | None = None) -> dict:
         elif event == "sql":
             item["sql"] = data.get("sql") or ""
             item["has_sql"] = bool(data.get("sql") or data.get("has_sql"))
-            item["tables"] = data.get("tables") or []
+            item["tables"] = data.get("tables") or []          # SQL 实际引用的表
+            item["retrieved"] = data.get("retrieved") or []    # Schema 检索命中的 Top-K
         elif event == "table":
             item["query"] = {"columns": data["columns"], "row_count": data["row_count"],
                              "truncated": data["truncated"],
@@ -233,8 +234,8 @@ def render_item(item: dict) -> None:
         if item.get("sql"):
             with st.expander("查看生成的 SQL"):
                 st.code(item["sql"], language="sql")
-                if item.get("tables"):
-                    st.caption("Schema 检索命中：%s" % ", ".join(item["tables"]))
+                if item.get("retrieved") or item.get("tables"):
+                    st.caption("Schema 检索命中：%s" % ", ".join(item.get("retrieved") or item["tables"]))
         if item.get("error"):
             with st.expander("为什么失败（护栏/执行详情）"):
                 st.code(item["error"], language="text")

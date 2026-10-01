@@ -8,6 +8,8 @@
 """
 from __future__ import annotations
 
+import contextlib
+import contextvars
 import json
 import random
 import re
@@ -101,6 +103,45 @@ class Usage:
 USAGE = Usage()
 _client: OpenAI | None = None
 
+# ---------------------------------------------------------------------------
+# 按请求隔离的用量作用域
+# ---------------------------------------------------------------------------
+# 为什么需要：服务化后一个进程同时处理多个请求，而 USAGE 是模块级单例 ——
+# A 请求的 done 事件会把 B 请求的 token/成本算进自己的增量里（成本面板、审计金额全错）。
+# 单机 Streamlit 场景下没有并发，作用域不存在时自动落到全局单例，行为不变。
+_CURRENT_USAGE: contextvars.ContextVar[Usage | None] = contextvars.ContextVar(
+    "llm_usage", default=None)
+
+
+def usage() -> Usage:
+    """当前上下文的用量累计器（未开隔离时就是全局单例）"""
+    return _CURRENT_USAGE.get() or USAGE
+
+
+@contextlib.contextmanager
+def isolated_usage() -> Iterator[Usage]:
+    """为一次请求开独立的用量作用域（**可重入**）。
+
+    用法：with isolated_usage(): ...
+
+    两个实现细节都是踩过坑才定下来的：
+    · **可重入**：编排层已开了一层，服务层再包一层时不能把用量吞进内层（外层看到 0）；
+    · **不用 ContextVar token/reset**：SSE 这类流式响应会在**另一个 Context** 里迭代生成器，
+      reset(token) 会抛 `Token was created in a different Context`（边车测试实测踩到）。
+      改为直接设置/清除，并且只在"当前作用域仍是我"时清除，避免误清别人的。
+    """
+    existing = _CURRENT_USAGE.get()
+    if existing is not None:
+        yield existing
+        return
+    scope = Usage()
+    _CURRENT_USAGE.set(scope)
+    try:
+        yield scope
+    finally:
+        if _CURRENT_USAGE.get() is scope:
+            _CURRENT_USAGE.set(None)
+
 RETRYABLE_STATUS = {408, 409, 429, 500, 502, 503, 504}
 RETRYABLE_NAMES = ("RateLimitError", "APITimeoutError", "APIConnectionError", "InternalServerError")
 
@@ -162,7 +203,7 @@ def chat(
                 # 实测跨问题命中 75~95%，必须单独记账，否则成本估算会把缓存读按全价计。
                 details = getattr(resp.usage, "prompt_tokens_details", None)
                 cached = int(getattr(details, "cached_tokens", 0) or 0)
-                USAGE.add(use_model, resp.usage.prompt_tokens or 0,
+                usage().add(use_model, resp.usage.prompt_tokens or 0,
                           resp.usage.completion_tokens or 0, latency, cached=cached)
             logger.debug("[llm] {} model={} {}s tokens={}", tag or "chat", use_model, latency,
                          getattr(resp.usage, "total_tokens", "-"))
@@ -179,7 +220,7 @@ def chat(
             last_exc = exc
             if attempt >= LLM.max_retries or not _retryable(exc):
                 break
-            USAGE.retries += 1
+            usage().retries += 1
             wait = min(2 ** attempt + random.uniform(0, 0.5), 20)
             logger.warning("[llm] 第 {} 次失败({})，{}s 后重试: {}", attempt + 1, type(exc).__name__, wait,
                            str(exc)[:120])
@@ -211,4 +252,4 @@ def chat_json(messages: list[dict[str, str]], **kwargs: Any) -> dict[str, Any]:
 
 
 def stats() -> dict[str, Any]:
-    return USAGE.summary()
+    return usage().summary()
