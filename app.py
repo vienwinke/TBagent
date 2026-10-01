@@ -1,4 +1,4 @@
-﻿# -*- coding: utf-8 -*-
+# -*- coding: utf-8 -*-
 """数据问答 Agent · Streamlit 界面
 
 提问 → 意图路由 → NL2SQL（Schema 检索 → 生成 → 三层护栏 → 只读执行 → 回环修复）
@@ -153,12 +153,18 @@ def handle(question: str) -> dict:
 
     item.update(sql=r.sql, guard=r.guard, query=r.query, rows=r.rows,
                 attempts=r.attempts, repaired=r.repaired, stage=r.stage, error=r.error,
-                tables=r.tables, elapsed_ms=int((time.time() - started) * 1000),
+                tables=r.tables, scope=r.scope, scope_reason=r.scope_reason,
+                denied=r.denied, deny_reason=r.deny_reason,
+                elapsed_ms=int((time.time() - started) * 1000),
                 tokens=after["total_tokens"] - before.get("total_tokens", 0),
                 cost=after["cost_yuan"] - before.get("cost_yuan", 0.0))
     if r.ok:
         item["answer_text"] = answer_mod.summarize(question, r.query.get("columns", []),
                                                    [tuple(x.values()) for x in r.rows])
+    elif r.denied:
+        # 拒答是正常业务结果（越权/敏感/注入），不是"查询失败"：
+        # 给确定性话术 + 可问替代，别把内部原因或"未知错误"抛给用户
+        item["answer_text"] = r.deny_message()
     else:
         item["answer_text"] = "⚠️ 未能完成查询：%s" % (r.error or "未知错误")
     return item
@@ -183,6 +189,14 @@ def render_item(item: dict) -> None:
                         st.write("· " + c)
                     for h in (item.get("hits") or [])[:4]:
                         st.caption("【%s】%s" % (h["heading"], h["text"][:100].replace("\n", " ")))
+            return
+        if item.get("denied"):
+            # 拒答：既没有 SQL 也不该有表格。展示判定依据（可审计），但不泄露内部机制细节。
+            st.caption("耗时 %dms · tokens %d · 成本 ¥%.5f · 🛡 已按权限范围拒答"
+                       % (item.get("elapsed_ms", 0), item.get("tokens", 0), item.get("cost", 0.0)))
+            with st.expander("为什么不答（范围判定依据）"):
+                st.code("判定范围：%s\n判定依据：%s" % (item.get("scope") or "-",
+                                                      item.get("scope_reason") or "-"), language="text")
             return
         q = item.get("query") or {}
         cols = q.get("columns") or []

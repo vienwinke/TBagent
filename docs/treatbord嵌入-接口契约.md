@@ -147,9 +147,25 @@ prompts_user.chart_messages(columns, rows, question)
 prompts_user.deny_text(reason, *, suggestions=None) -> str
 prompts_user.REPAIR_KINDS / REPAIR_HINTS / DENY_TEMPLATES / PROMPT_VERSION
 
-# ── 数据分支（agent/nl2sql.py）—— ★ 已接线：生成后经 policy.rewrite → policy.execute
+# ── 语义层范围判定（agent/scope.py）—— ★ 已接线：判定在**生成之前**，拒答不消耗模型调用
+scope.judge(question, principal, *, history="", llm_fn=None) -> ScopeDecision
+scope.judge_by_rules(question, principal) -> ScopeDecision | None   # 纯规则，确定性
+scope.SELF / MARKET / PLATFORM / OTHER_USER / SENSITIVE / NON_BUSINESS
+scope.DENY_PLATFORM / DENY_OTHER_USER / DENY_SENSITIVE / DENY_INJECTION / DENY_MODEL_REFUSE
+#   规则命中即返回，绝不调模型：同一问题必然同一结论
+#     （曾因判定依赖采样，同一平台级问题出现"一次拒答、一次错答"）
+#   llm_fn 仅在调用方显式传入、且规则一个都没命中时兜底；
+#     未命中且无兜底 → 默认放行（行级隔离仍是硬底线，语义层是它之上的第二道网）
+#   角色闸门：SENSITIVE 对所有角色拒答；PLATFORM / OTHER_USER 只对非特权角色拒答
+
+# ── 数据分支（agent/nl2sql.py）—— ★ 已接线：语义判定 → 生成 → policy.rewrite → policy.execute
 nl2sql.answer(question, *, principal: Principal | None = None, llm_fn=None,
-              max_repair=1, execute=True, top_k=None, use_cache=True) -> Nl2SqlResult
+              scope_llm_fn=None, history="", max_repair=1, execute=True,
+              top_k=None, use_cache=True) -> Nl2SqlResult
+#   Nl2SqlResult 新增：scope（判定范围）、scope_reason（判定依据）、
+#   denied / deny_message()（拒答话术，确定性模板）
+#   拒答三类来源：语义层（INJECTION/SENSITIVE/PLATFORM/OTHER_USER）、
+#   策略层（PolicyDenied 且不可回环）、模型主动拒答（{"refuse":true} → DENY_MODEL_REFUSE）
 
 # ── 既有模块
 router.route(question, *, classify_fn=None) -> "chat" | "knowledge" | "data"
@@ -197,4 +213,4 @@ python -m pytest -q                    # 含 policy 42 条 + 安全套件门禁
 |---|---|---|
 | A | ~~单机 `principal=None` 的语义~~ **已定**：按「单机管理员」处理（不做行级隔离），但 `Nl2SqlResult.isolated=False` + 首次使用时告警；服务层必须显式传 principal | 已实现 |
 | B | `executor.execute_readonly` 是否加硬约束（只接受 `RewrittenSql`） | 决定 `policy.execute` 是否成为**唯一**入口 |
-| C | `main`/`内嵌` 历史里的旧密钥处置（轮换 / 擦除历史 / 忽略） | 安全收尾 |
+| C | **已查明**（不再是"待定"，是待执行的安全动作）：`26bc0b2` 把一把真实密钥（`user_…` 形态，非 `sk-` 前缀）写进 `.env.example`，随 `origin/内嵌` 推上远端；两侧远端 **tip 已干净**，但**历史可完整取回**。本机 `main` 分支 tip 仍带明文。仓库侧扫描器本可命中该形态（是没人跑，不是规则漏），现已接进 pre-commit。**待你执行**：① 供应商侧确认吊销旧值；② 决定公开历史是否重写 | 安全收尾 |

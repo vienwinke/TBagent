@@ -23,8 +23,8 @@ import llm as llm_mod
 from agent import cache as cache_mod
 from agent import executor as ex
 from agent import policy
-from agent import prompts
-from agent import sql_guard
+from agent import prompts_user
+from agent import scope as scope_mod
 from agent.policy import ROLE_ADMIN, Principal
 from agent.schema_index import SchemaIndex, load_schema
 
@@ -75,7 +75,9 @@ class Nl2SqlResult:
     repaired: bool = False
     cache_hit: bool = False                              # 是否命中"问题→SQL"缓存（省掉生成调用）
     isolated: bool = False                               # 是否做了行级隔离（USER 视角为 True）
-    deny_reason: str | None = None                       # 被策略拒绝时的原因（DENY_*）
+    scope: str | None = None                             # 语义层判定的数据范围（SELF/MARKET/…）
+    scope_reason: str = ""                               # 判定依据（命中规则 / 模型判定 / 默认）
+    deny_reason: str | None = None                       # 被拒绝时的原因（DENY_*）
     raw_sqls: list[str] = field(default_factory=list)   # 每次尝试模型给出的原始 SQL（未过护栏）
     error: str | None = None
     stage: str = "init"          # init|generate|guard|execute|done|failed
@@ -85,12 +87,23 @@ class Nl2SqlResult:
     def ok(self) -> bool:
         return self.error is None and self.stage == "done"
 
+    @property
+    def denied(self) -> bool:
+        """是否被拒答（语义层越权 / 策略越权）。拒答不是错误：它是正常业务结果。"""
+        return self.stage == "denied" and bool(self.deny_reason)
+
+    def deny_message(self) -> str:
+        """拒答话术：确定性模板，不调模型（前端直接渲染）"""
+        return prompts_user.deny_text(self.deny_reason) if self.deny_reason else ""
+
     def summary(self) -> dict[str, Any]:
         return {"question": self.question, "sql": self.sql, "reason": self.reason,
                 "tables": self.tables, "guard": self.guard, "query": self.query,
                 "row_count": self.query.get("row_count"), "attempts": self.attempts,
                 "repaired": self.repaired, "cache_hit": self.cache_hit,
-                "isolated": self.isolated, "deny_reason": self.deny_reason,
+                "isolated": self.isolated, "scope": self.scope,
+                "scope_reason": self.scope_reason, "denied": self.denied,
+                "deny_reason": self.deny_reason, "deny_message": self.deny_message(),
                 "error": self.error, "stage": self.stage,
                 "raw_sqls": self.raw_sqls,
                 "usage": self.usage}
@@ -100,14 +113,35 @@ def _default_llm_fn(messages: list[dict[str, str]]) -> dict[str, Any]:
     return llm_mod.chat_json(messages, tag="nl2sql")
 
 
-def _extract(raw: Any) -> tuple[str, str]:
-    """从模型输出里取出 sql / reason，结构不对就报错（触发回环）"""
+def _extract(raw: Any) -> tuple[str, str, str]:
+    """从模型输出里取出 (sql, reason, refuse_reason)；结构不对就报错（触发回环）
+
+    提示词包要求模型在"这个问题在本角色范围内没法答"时返回
+    {"refuse": true, "refuse_reason": "…"} —— 把它当作**模型主动拒答**，
+    而不是当成缺字段的生成失败去回环（回环只会再换来一次拒答）。
+    """
     if not isinstance(raw, dict):
         raise ValueError("模型输出不是 JSON 对象")
+    if raw.get("refuse"):
+        return "", "", str(raw.get("refuse_reason") or "模型判定超出当前角色范围")
     sql = str(raw.get("sql", "")).strip()
     if not sql:
         raise ValueError("模型输出缺少 sql 字段")
-    return sql, str(raw.get("reason", "")).strip()
+    return sql, str(raw.get("reason", "")).strip(), ""
+
+
+def _error_kind(exc: Exception) -> str:
+    """把执行期异常映射成提示词包的定向修复类型（REPAIR_KINDS）
+
+    定向回环比笼统回灌有效：too_expensive 要收窄范围，sql_error 要核对列名，
+    二者给模型的提示完全不同（见 prompts_user.REPAIR_HINTS）。
+    """
+    if isinstance(exc, ex.SqlCostError):
+        return "too_expensive"
+    text = str(exc).lower()
+    if "timeout" in text or "超时" in text:
+        return "timeout"
+    return "sql_error"
 
 
 def answer(
@@ -115,6 +149,8 @@ def answer(
     *,
     principal: Principal | None = None,
     llm_fn: LlmFn | None = None,
+    scope_llm_fn: LlmFn | None = None,
+    history: str = "",
     max_repair: int = 1,
     execute: bool = True,
     top_k: int | None = None,
@@ -124,6 +160,11 @@ def answer(
 
     成本优化：命中「问题→SQL」缓存时**跳过生成**（0 次 LLM 调用），
     但仍然重新过护栏 + 重新执行 —— 数据不陈旧，省的只是最贵的那次生成。
+
+    语义层（scope_llm_fn）：范围判定默认**只跑确定性规则**；只有调用方显式传入
+    scope_llm_fn 时才在"规则一个都没命中"的情况下用模型兜底。这样设计的原因：
+    判定结果必须可复现 —— 同一个平台级问题曾两次运行给出不同结果（一次拒答、一次错答）。
+    服务层要开兜底，就显式传 `scope_llm_fn=nl2sql._default_llm_fn`。
     """
     call_llm = llm_fn or _default_llm_fn
     usage_before = llm_mod.USAGE.summary()
@@ -132,11 +173,30 @@ def answer(
         principal = _local_principal()
     res.isolated = not principal.is_privileged
     # 缓存隔离维度：角色 + 策略版本（同一个 principal 贯穿本次请求的所有环节）
-    scope = policy.cache_scope(principal)
+    cache_scope = policy.cache_scope(principal)
 
-    # 0) 缓存命中：复用上次的 SQL，重新执行
+    def _finish(r: Nl2SqlResult) -> Nl2SqlResult:
+        """统一收尾：无论从哪条路径返回，用量与 repaired 都要结算（早期 return 曾漏掉过）"""
+        after = llm_mod.USAGE.summary()
+        r.usage = {k: after[k] - usage_before.get(k, 0)
+                   for k in ("calls", "prompt_tokens", "completion_tokens", "total_tokens", "retries")}
+        r.repaired = r.attempts > 1 and r.ok
+        return r
+
+    # 0) ★ 语义层范围判定：必须在缓存之前 —— 被判定越权的问题既不查缓存也不生成。
+    #    否则"以前答过并被缓存"会绕过后加的规则。
+    decision = scope_mod.judge(question, principal, history=history, llm_fn=scope_llm_fn)
+    res.scope, res.scope_reason = decision.scope, decision.reason
+    if not decision.allowed:
+        res.stage, res.deny_reason = "denied", decision.deny_reason
+        res.error = "语义越权[%s]: %s" % (decision.deny_reason, decision.reason)
+        logger.warning("[nl2sql] 语义层拒答 {}：{}（{}）", decision.deny_reason,
+                       decision.reason, decision.source)
+        return _finish(res)
+
+    # 1) 缓存命中：复用上次的 SQL，重新执行
     if use_cache and execute:
-        hit = cache_mod.cache().get(question, top_k, scope=scope)
+        hit = cache_mod.cache().get(question, top_k, scope=cache_scope)
         if hit:
             try:
                 # ★ 缓存里存的是**重写前**的 SQL：命中后仍然重新过策略层（唯一出口）
@@ -147,11 +207,11 @@ def answer(
                 res.reason = "缓存命中：复用上次生成的 SQL（数据为本次重新执行）"
                 res.tables = hit.get("tables") or []
                 res.cache_hit, res.stage, res.attempts = True, "done", 0
-                return res
+                return _finish(res)
             except Exception as exc:  # noqa: BLE001  缓存里的 SQL 已不可用 → 静默走正常生成
                 logger.debug("[nl2sql] 缓存 SQL 不可用，改为重新生成：{}", str(exc)[:80])
 
-    # 1) Schema 检索（★ 只在角色可见表内检索与注入）
+    # 2) Schema 检索（★ 只在角色可见表内检索与注入）
     idx = _scoped_index(principal)
     hits = idx.search(question, top_k)
     res.tables = [h.table for h in hits]
@@ -160,18 +220,29 @@ def answer(
 
     error: str | None = None
     prev_sql: str | None = None
+    kind: str | None = None
     for attempt in range(max_repair + 1):
         res.attempts = attempt + 1
-        # 2) 生成
+        # 3) 生成（嵌入版提示词包：带身份策略前置 + {{ME}} 占位符 + 定向回环）
         res.stage = "generate"
         try:
-            raw = call_llm(prompts.nl2sql_messages(schema_text, question, error=error, prev_sql=prev_sql))
-            sql, reason = _extract(raw)
-            res.raw_sqls.append(sql)
+            raw = call_llm(prompts_user.nl2sql_messages(
+                schema_text, question, principal,
+                error=error, prev_sql=prev_sql, kind=kind))
+            sql, reason, refuse_reason = _extract(raw)
         except Exception as exc:  # noqa: BLE001
             error, res.stage = "生成阶段失败: %s" % str(exc)[:200], "generate"
+            kind = "sql_error"
             logger.warning("[nl2sql] 第 {} 次生成失败: {}", res.attempts, error)
             continue
+
+        if refuse_reason:
+            # 模型主动拒答：它已经按提示词判断"本角色答不了"，回环只会再换来一次拒答
+            res.stage, res.deny_reason = "denied", scope_mod.DENY_MODEL_REFUSE
+            res.error = "模型拒答: %s" % refuse_reason
+            logger.warning("[nl2sql] 模型主动拒答（不回环）: {}", refuse_reason[:120])
+            break
+        res.raw_sqls.append(sql)
 
         # 3) ★ 唯一出口：静态护栏 + 行级隔离重写（policy.rewrite 内部先跑 sql_guard）
         res.stage = "guard"
@@ -200,33 +271,30 @@ def answer(
             qr = policy.execute(rw, check_cost=False)
         except ex.SqlError as exc:
             error, prev_sql = "执行失败: %s" % exc, rw.sql
-            logger.warning("[nl2sql] 第 {} 次执行失败: {}", res.attempts, exc)
+            kind = _error_kind(exc)
+            logger.warning("[nl2sql] 第 {} 次执行失败（{}）: {}", res.attempts, kind, exc)
             continue
 
         res.query, res.rows = qr.summary(), qr.as_dicts()
         if use_cache:
             # ★ 只缓存**重写前**的 SQL（带身份的重写结果绝不能复用给他人）
-            cache_mod.cache().put(question, sql, tables=res.tables, top_k=top_k, scope=scope)
+            cache_mod.cache().put(question, sql, tables=res.tables, top_k=top_k, scope=cache_scope)
         if qr.row_count == 0 and attempt < max_repair:
             error = "查询返回 0 行：条件或枚举值可能不对（例如状态值、时间范围）"
-            prev_sql = rw.sql
+            prev_sql, kind = rw.sql, "empty_result"
             logger.info("[nl2sql] 第 {} 次返回 0 行，触发回环修复", res.attempts)
             continue
         res.stage = "done"
         break
 
     if res.stage == "denied":
-        pass                                          # 策略直接拒绝：保留 stage/error/deny_reason
+        pass                          # 拒答（语义层 / 策略层 / 模型主动）：保留 stage/error/deny_reason
     elif res.stage != "done":
         res.stage, res.error = "failed", error
         if prev_sql:
             res.sql = prev_sql
 
-    res.repaired = res.attempts > 1 and res.ok
-    usage_after = llm_mod.USAGE.summary()
-    res.usage = {k: usage_after[k] - usage_before.get(k, 0)
-                 for k in ("calls", "prompt_tokens", "completion_tokens", "total_tokens", "retries")}
-    return res
+    return _finish(res)
 
 
 def main() -> None:

@@ -6,7 +6,9 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from agent import nl2sql  # noqa: E402
+from agent import prompts_user  # noqa: E402
 from agent import sql_guard  # noqa: E402
+from agent.policy import Principal  # noqa: E402
 
 GOOD = {"sql": "SELECT COUNT(*) AS 任务数 FROM task WHERE deleted = 0", "reason": "统计任务总数"}
 
@@ -95,11 +97,29 @@ def test_dry_run_skips_execution():
 
 
 def test_prompt_injects_domain_rules_and_schema():
-    msgs = nl2sql.prompts.nl2sql_messages("表 task（任务主表）\n  status varchar(20) 状态", "待接取任务数")
+    """提示词必须注入业务规则 + 检索到的 schema（G2 后来源换成嵌入版提示词包）
+
+    这条测的是"注入"，不是"用哪个模块"：模块从 agent.prompts 换成 agent.prompts_user 后，
+    原来三条断言（业务规则 / schema / 严格 JSON）必须继续成立。
+    """
+    principal = Principal(user_id=7)
+    msgs = prompts_user.nl2sql_messages(
+        "表 task（任务主表）\n  status varchar(20) 状态", "待接取任务数", principal)
     text = msgs[0]["content"] + msgs[1]["content"]
     assert "OPEN" in text and "deleted = 0" in text          # 业务规则注入
     assert "表 task" in text                                  # 检索到的 schema 注入
-    assert "严格 JSON" in text or "严格 JSON" in msgs[0]["content"]
+    assert "严格 JSON" in msgs[0]["content"]
+    # 嵌入版特有：身份策略前置 + {{ME}} 占位符纪律（普通用户的提示词里不得有字面身份常量）
+    assert "user_id = 7" in msgs[0]["content"]
+    assert "{{ME}}" in text
+
+
+def test_privileged_role_gets_admin_prompt():
+    """OPERATOR 也必须拿到运营版提示词（用 is_privileged 而非 is_admin 判据）"""
+    user_msgs = prompts_user.nl2sql_messages("表 task", "任务数", Principal(user_id=7))
+    op_msgs = prompts_user.nl2sql_messages("表 task", "任务数", Principal(user_id=7, role="OPERATOR"))
+    assert "本角色（USER）的额外约束" in user_msgs[0]["content"]
+    assert "本角色（ADMIN）说明" in op_msgs[0]["content"]
 
 
 def test_guard_stats_recorded():

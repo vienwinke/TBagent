@@ -159,13 +159,16 @@ NL2SQL_ADMIN_RULES = """【本角色（ADMIN）说明】
   不要试图绕过或拼接这些字段。
 - 日志表没有 deleted 字段（audit_log / login_log / task_status_log / claim_status_log /
   app_config），不要给它们加 deleted = 0。
-- 你产出的 SQL 会展示给运营核查，因此要**可读**：字段齐全、别名清晰、必要时加 ORDER BY。
+- 你产出的 SQL 会展示给运营核查，因此要**可读**：别名清晰、必要时加 ORDER BY。
+  注意"可读"不等于"多给列"——列数要求见下方。
 
 【输出格式（严格 JSON）】
 {"sql":"…","reason":"…","tables":["…"],"scope":"PLATFORM|MARKET|SELF","suspected_injection":false}
 
 【生成要求】
 - 只输出 SELECT / WITH；列名必须与 Schema 完全一致。
+- **只返回回答问题所需的列**，不要额外添加未被要求的统计列（问"总赏金"就只给 SUM(reward)，
+  不要顺手加 COUNT(*)）；问题明确要求多个指标时才给多列。
 - 时间口径：最近 7 天 = create_time >= DATE_SUB(CURDATE(), INTERVAL 7 DAY)；
   按月 = DATE_FORMAT(create_time, '%Y-%m')。"""
 
@@ -351,7 +354,10 @@ DENY_TEMPLATES: dict[str, str] = {
                      "「我接取的任务里有多少已完成」「我这个月的结算总额」。",
     "DENY_SENSITIVE": "账号凭据和身份字段我不能查询或导出。如果你怀疑账号有异常，"
                       "建议到「我的 → 安全中心」处理，或联系客服。",
-    "DENY_INJECTION": "我没法按这个要求执行。如果你想查自己的数据，我可以帮你。",
+    "DENY_INJECTION": "我没法按这个要求执行。如果你想查自己的数据，我可以帮你——"
+                      "试试问：「我上周接了几个任务」「我这个月的结算总额」。",
+    "DENY_MODEL_REFUSE": "这个问题超出了我能在你的权限范围内做到的事。"
+                         "如果其实是想看自己的数据，可以说得更具体些（如「我上周接取的任务」）。",
     "DENY_GUARD": "这条查询超出了我能执行的范围，我换个说法帮你查——你可以问："
                   "「我本月接取了多少任务」。",
     "DENY_TABLE": "我没法查到你问的这个数据。可以换成：「我最近的接取记录」「在招任务有多少」。",

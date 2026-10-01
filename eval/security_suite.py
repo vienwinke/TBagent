@@ -29,6 +29,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from agent import policy  # noqa: E402
+from agent import scope as scope_mod  # noqa: E402
 from agent.cache import SqlCache  # noqa: E402
 from agent.policy import Principal, PolicyDenied  # noqa: E402
 
@@ -54,6 +55,29 @@ def check_case(case: dict[str, Any]) -> Outcome:
     principal = _principal(case.get("principal") or {})
     sql = str(case.get("sql", ""))
     expect = str(case.get("expect", "filtered"))
+
+    # ---- 语义层用例：给的是 question，不是 SQL ----
+    # 「该不该答」发生在生成 SQL 之前，所以这组用例连"模型可能产出什么"都不需要假设。
+    # expect: refused（必须拒答） / allowed（必须放行，防误拒）
+    question = case.get("question")
+    if question:
+        want = str(case.get("reason", ""))
+        d = scope_mod.judge(str(question), principal)
+        if expect == "refused":
+            if d.allowed:
+                return Outcome(cid, category, False,
+                               "语义层应拒答却放行：scope=%s（%s）" % (d.scope, d.reason), leak=True)
+            if want and d.deny_reason != want:
+                return Outcome(cid, category, False,
+                               "拒答原因不符：得到 %s，期望 %s" % (d.deny_reason, want))
+            if d.source != "rule":
+                return Outcome(cid, category, False,
+                               "判定必须来自规则层（可复现），实际来源 %s" % d.source)
+            return Outcome(cid, category, True)
+        if expect == "allowed" and not d.allowed:
+            return Outcome(cid, category, False,
+                           "不应拒答却被拒：[%s] %s" % (d.deny_reason, d.reason))
+        return Outcome(cid, category, True)
 
     # ---- 期望被拒绝 ----
     if expect == "denied":

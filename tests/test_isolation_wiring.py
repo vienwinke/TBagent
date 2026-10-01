@@ -102,7 +102,12 @@ def test_no_principal_is_single_user_admin_and_not_isolated(monkeypatch):
 
 
 def test_platform_scope_denial_is_terminal_and_never_touches_db(monkeypatch):
-    """语义越权：不回环、不查库，直接拒答"""
+    """语义越权：不回环、不查库，直接拒答
+
+    G2 之前：拒答发生在 policy.rewrite（模型先产出一条引用了 audit_log 的 SQL 才被拦），
+    所以这里断言"生成调用 1 次"。G2 把范围判定前移到生成之前 —— 现在连生成都不做，
+    因此断言改为 0 次：拒答不再依赖"模型恰好写到了那张不该写的表"。
+    """
     llm_calls = []
     captured = []
     _capture_execute(monkeypatch, captured)
@@ -115,8 +120,9 @@ def test_platform_scope_denial_is_terminal_and_never_touches_db(monkeypatch):
                       max_repair=1)
 
     assert r.stage == "denied" and r.deny_reason == policy.DENY_PLATFORM
+    assert r.scope == "PLATFORM", "拒答必须带上语义层判定的范围，便于审计"
     assert r.ok is False
-    assert len(llm_calls) == 1, "语义越权不该回环重试"
+    assert len(llm_calls) == 0, "语义层应在生成之前拦下，不该再花一次模型调用"
     assert captured == [], "被拒的查询绝不能送到数据库"
 
 
