@@ -205,6 +205,51 @@ def _live_reference(case: dict[str, Any]) -> tuple[list[Any] | None, str | None]
         return None, None
 
 
+def recompute_extra_metrics(rows: list[dict[str, Any]], *, cases_path: Path | None = None,
+                            index: Any = None) -> dict[str, Any]:
+    """从**已存档**的跑分结果重算三项指标（不调模型、不执行 SQL，只做本地检索）。
+
+    为什么需要：这三项（SQL 可执行率 / Schema 召回率 / 首次修复成功率）长期只在 README 里
+    手工写着，harness 不产出 —— 于是"指标表里有两行是空的"。现在既在跑分时计算，
+    也能对历史存档事后重算，不必重跑一遍花掉的钱。
+
+    schema recall 用与 harness 相同的确定性 BM25 检索重算注入的 Top-K，
+    因此对同一份 cases.yaml 结果一致；index 可注入以便单测。
+    """
+    data = yaml.safe_load((cases_path or CASES).read_text(encoding="utf-8"))
+    cases = {c["id"]: c for c in (data["cases"] if isinstance(data, dict) else data)}
+
+    answer = [r for r in rows if r.get("expect", "answer") == "answer"]
+    exec_ok = sum(1 for r in answer if r.get("stage") == "done")
+    fix_att = [r for r in answer if (r.get("attempts") or 0) > 1]
+    fix_ok = sum(1 for r in fix_att if r.get("repaired"))
+
+    if index is None:
+        from agent.schema_index import SchemaIndex, load_schema
+        visible = policy.visible_tables(EVAL_PRINCIPAL)
+        index = SchemaIndex(tables=[t for t in load_schema()["tables"] if t["name"].lower() in visible])
+
+    hit = total = 0
+    for r in answer:
+        try:
+            ref_tables = set(policy.rewrite(cases.get(r["id"], {}).get("reference_sql") or "",
+                                            EVAL_PRINCIPAL).tables)
+        except Exception:  # noqa: BLE001
+            continue
+        if not ref_tables:
+            continue
+        total += 1
+        injected = {h.table for h in index.search(r["question"], None)}
+        hit += int(ref_tables.issubset(injected))
+
+    def rate(num: int, den: int) -> float:
+        return round(num / den, 4) if den else 0.0
+
+    return {"sql_exec_rate": rate(exec_ok, len(answer)), "sql_exec_total": len(answer),
+            "schema_recall": rate(hit, total), "schema_recall_total": total,
+            "first_fix_rate": rate(fix_ok, len(fix_att)), "first_fix_attempted": len(fix_att)}
+
+
 def score(*, top_k=None, max_repair=1, label="baseline", limit=None,
           ids=None, category=None) -> dict[str, Any]:
     data = load_cases()
@@ -212,7 +257,10 @@ def score(*, top_k=None, max_repair=1, label="baseline", limit=None,
     per_case, latencies, tokens = [], [], []
     ex_hit = ex_relaxed_hit = ex_total = blocked = block_total = mask_ok = mask_total = repaired = 0
     danger_generated = 0
-    stale = 0                      # 存档基准已漂移的题数（改用实时基准判定）
+    stale = 0
+    exec_ok = 0                                   # SQL 可执行率（生成→护栏→执行全过）
+    schema_hit = schema_total = 0                 # Schema 召回率（参考表是否都在注入的 Top-K 内）
+    fix_attempted = fix_ok = 0                    # 首次修复成功率（首次失败后回环是否救回）                      # 存档基准已漂移的题数（改用实时基准判定）
     for c in cases:
         expect = c.get("expect", "answer")
         t0 = time.time()
@@ -248,6 +296,18 @@ def score(*, top_k=None, max_repair=1, label="baseline", limit=None,
             mask_ok += ok
         else:
             ex_total += 1
+            # ── 三项此前"只在 README 里写着、从未被自动测量"的指标 ──
+            exec_ok += int(r.stage == "done")
+            try:
+                ref_tables = set(policy.rewrite(c.get("reference_sql") or "", EVAL_PRINCIPAL).tables)
+            except Exception:  # noqa: BLE001
+                ref_tables = set()
+            if ref_tables:
+                schema_total += 1
+                schema_hit += int(ref_tables.issubset(set(r.tables or [])))
+            if r.attempts > 1:
+                fix_attempted += 1
+                fix_ok += int(bool(r.repaired))
             stored = (c.get("expected") or {}).get("hash")
             ref_rows, live = _live_reference(c)
             exp = live or stored                       # ★ 优先实时基准，存档仅作兜底
@@ -295,6 +355,10 @@ def score(*, top_k=None, max_repair=1, label="baseline", limit=None,
                   "mask_rate": round(mask_ok / mask_total, 4) if mask_total else 0.0,
                   "repaired_cases": repaired,
                   "stale_baselines": stale,
+                  "sql_exec_rate": round(exec_ok / ex_total, 4) if ex_total else 0.0,
+                  "schema_recall": round(schema_hit / schema_total, 4) if schema_total else 0.0,
+                  "first_fix_rate": round(fix_ok / fix_attempted, 4) if fix_attempted else 0.0,
+                  "first_fix_attempted": fix_attempted,
                   "latency_p50_ms": int(percentile(latencies, 50)),
                   "latency_p95_ms": int(percentile(latencies, 95)),
                   "avg_tokens": int(sum(tokens) / len(tokens)) if tokens else 0,
@@ -313,6 +377,10 @@ def scorecard(result: dict[str, Any]) -> str:
     lines = ["# 评估跑分 · %s" % result["label"], "", "| 指标 | 值 |", "|---|---|",
              "| 执行准确率 EX（严格） | **%.1f%%** (%d/%d) |" % (m["ex_rate"] * 100, m["ex_hit"], m["ex_total"]),
              "| 执行准确率 EX（宽松，允许多列） | **%.1f%%** (%d/%d) |" % (m["ex_rate_relaxed"] * 100, m["ex_relaxed_hit"], m["ex_total"]),
+             "| SQL 可执行率 | **%.1f%%** |" % (m.get("sql_exec_rate", 0.0) * 100),
+             "| Schema 召回率（参考表在注入的 Top-K 内） | **%.1f%%** |" % (m.get("schema_recall", 0.0) * 100),
+             "| 首次修复成功率（首次失败后回环救回） | **%.1f%%**（%d 题曾失败） |"
+             % (m.get("first_fix_rate", 0.0) * 100, m.get("first_fix_attempted", 0)),
              "| 危险操作执行率（护栏层，应为 0） | %.1f%%（%d/%d 安全） |" % (m["block_rate"] * 100, m["blocked"], m["block_total"]),
              "| 其中模型照做了危险请求 | %d 题（护栏必要性） |" % m["danger_generated"],
              "| 脱敏命中率 | %.1f%% |" % (m["mask_rate"] * 100),
