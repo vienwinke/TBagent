@@ -18,7 +18,25 @@ FAIL, WARN, OK = [], [], []
 
 
 def git(*args: str) -> str:
-    return subprocess.run(["git", "-C", str(ROOT), *args], capture_output=True, text=True).stdout
+    """跑一条 git 命令并返回 stdout —— **fail-closed**。
+
+    为什么不能返回空串了事：本仓库的密钥门禁曾经在「git 失败」时把 stdout 的空串
+    当成"没有文件"，于是打印 `扫描 0 个文件，命中 0 条 ✓ 放行` 并**退出 0**。
+    拿不到文件清单却报"检查通过"，是比误报更危险的 fail-open ——
+    本机 Windows 侧的 dubious ownership 正是这个场景。
+    """
+    try:
+        proc = subprocess.run(["git", "-C", str(ROOT), *args],
+                              capture_output=True, text=True)
+    except FileNotFoundError:
+        print("✗ 找不到 git：无法确定文件清单 —— 安全检查不能\"看不见就当通过\"")
+        sys.exit(2)
+    if proc.returncode != 0:
+        print("✗ git %s 失败（exit %d）：%s"
+              % (" ".join(args), proc.returncode, (proc.stderr or "").strip()[:200]))
+        print("  拿不到文件清单就不能报『检查通过』 —— 已按 fail-closed 阻断。")
+        sys.exit(2)
+    return proc.stdout
 
 
 # 密钥扫描核心抽到 scripts/secret_scan.py：纯函数、可被 tests 直接 import，
