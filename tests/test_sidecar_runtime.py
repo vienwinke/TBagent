@@ -253,6 +253,15 @@ def test_timeout_reports_tokens_already_burned(monkeypatch):
 
 
 # ------------------------------------------------------------------ 204 必须无 body（真实服务器才会报）
+# 这条用例自己把 SESSION_ENABLED 打开并指向 treatbord_test —— 也就是**需要真 MySQL**。
+# 仓库既有惯例（test_audit / test_session / test_sidecar_sessions 都是这样）：
+# 按 DB_BACKEND 跳过，否则 CI 的 sqlite 快照腿会误红。
+from config import IS_SQLITE  # noqa: E402
+
+needs_mysql = pytest.mark.skipif(IS_SQLITE, reason="会话落库需要真实 MySQL（CI 用 sqlite 快照）")
+
+
+@needs_mysql
 def test_204_responses_have_no_body(monkeypatch):
     """204 带 body 会让真实 uvicorn 抛 `Response content longer than Content-Length`
     （TestClient 容忍它，所以这条必须显式断言 body 为空 —— 实测踩到过）。"""

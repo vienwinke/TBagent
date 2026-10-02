@@ -47,12 +47,17 @@ def test_usage_cost_is_summed_per_model():
 
 
 def test_usage_keeps_totals_and_per_model_breakdown():
+    # ⚠️ 不能拿 LLM.model / LLM.model_cheap 直接当 key：两档在**没有 .env 的环境**
+    #    里默认都是 "deepseek-chat"，字典会塌成一个键、计数变 2 → 断言假红
+    #    （CI 无 .env，本机有；实测干净检出下这条就是唯一的真失败）。
+    #    这里显式用两个不同的名字，与上一条 "两档配成同一模型时无从区分" 同样自觉。
+    main, cheap = "model-main", "model-cheap"
     u = llm.Usage()
-    u.add(LLM.model, 100, 20, 0.5)
-    u.add(LLM.model_cheap, 50, 5, 0.5)
+    u.add(main, 100, 20, 0.5)
+    u.add(cheap, 50, 5, 0.5)
     assert (u.prompt_tokens, u.completion_tokens, u.calls) == (150, 25, 2)
     assert u.total_tokens == 175
-    assert u.summary()["by_model"] == {LLM.model: 1, LLM.model_cheap: 1}
+    assert u.summary()["by_model"] == {main: 1, cheap: 1}
 
 
 def test_cached_input_is_priced_separately():
