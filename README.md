@@ -82,7 +82,7 @@ eval/         cases.yaml 60 条用例 · kb_cases.yaml 知识库用例 · run_ev
               security_cases.yaml + security_suite.py 越权红线（离线，不连库、不需要 Key）
 sql/          readonly_user.sql 最小权限只读账号 · ai_tables.sql 嵌入所需 ai_* 表（含授权模板）
 docs/         方案.md · 评估报告.md · 开发环境.md · 部署.md · 面试讲稿.md · 视频脚本.md · 计划.md
-              treatbord嵌入-技术栈重设计.md · treatbord嵌入-提示词包.md · treatbord嵌入-Java侧接入要点.md
+              treatbord嵌入-技术栈重设计.md · treatbord嵌入-接口契约.md · treatbord嵌入-提示词包.md · treatbord嵌入-Java侧接入要点.md
 data/         schema.json · schema_index.json · snapshot.sqlite · knowledge/ · cache/
 ```
 
