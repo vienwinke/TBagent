@@ -30,3 +30,8 @@ data/schema_index.json
 
 # 架构图一次性校验产物（截图 / 对照页 / 回执）——由 archify visual-check 重新生成
 docs/*.visual-check.*
+
+# 助手/工具产物（不应入仓；.ruff_cache 自身虽有 * 自忽略，但目录本身未被忽略）
+.deepseek-harness/
+.ruff_cache/
+.pytest_cache/
