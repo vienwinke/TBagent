@@ -11,8 +11,15 @@ on:
 
 jobs:
   gates:
-    name: 门禁（离线可跑，无需 Key / 无需 MySQL）
+    name: 门禁（离线可跑，无需 Key / 无需 MySQL）· py${{ matrix.python-version }}
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # 本地开发环境是 Python 3.14（见 docs/开发环境.md），而 CI 过去只测 3.12 ——
+        # 加上依赖未锁版本，"本地绿 / CI 绿 / 换台机器崩"三者可以同时成立。
+        # 两版都测，把差异暴露在 CI 而不是部署当天。
+        python-version: ["3.12", "3.14"]
     env:
       # 公开演示快照 data/snapshot.sqlite 随仓库分发，CI 不需要起 MySQL
       DB_BACKEND: sqlite
@@ -21,7 +28,7 @@ jobs:
 
       - uses: actions/setup-python@v5
         with:
-          python-version: "3.12"
+          python-version: ${{ matrix.python-version }}
 
       - name: 安装依赖
         run: |
@@ -41,6 +48,9 @@ jobs:
         run: python -m pytest -q
 
   mysql-types:
+    # 固定在 3.12 单一版本：这个任务的价值是"真 MySQL 的类型/DDL 盲区"，
+    # 与解释器版本的组合无关，矩阵化只会白烧两倍 MySQL 时间。
+    #
     # 为什么单独这一个任务：CI 主门禁用 sqlite 快照（快、无需服务），但 sqlite
     # **没有 Decimal、也不是 MySQL 方言** —— 恰好是"类型类缺陷"的盲区。
     # 实测代价：金额列（Decimal）让 SSE 序列化中途崩掉、上游只看到"边车不可达"，
