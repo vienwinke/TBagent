@@ -69,3 +69,54 @@ def test_aggregate_by_user_and_day(monkeypatch):
 def test_aggregate_rejects_unknown_dimension():
     with pytest.raises(ValueError):
         cost_report.aggregate(by="hour")
+
+
+@needs_mysql
+def test_feedback_satisfaction_report(monkeypatch):
+    """满意度聚合（--by feedback）：赞/踩/满意率/被改过的评价数。
+
+    "被改过" 靠 V10 加的 updated_at：updated_at > created_at ⇒ 用户改过评价
+    （原先只有 created_at，改主意完全看不出痕迹）。
+    """
+    monkeypatch.setenv("AUDIT_DB_NAME", TEST_DB)
+    conn = cost_report.connect()
+    with conn.cursor() as cur:
+        cur.execute("SHOW COLUMNS FROM ai_feedback LIKE 'updated_at'")
+        if cur.fetchone() is None:
+            conn.close()
+            pytest.skip("该库还没有 V10（ai_feedback.updated_at）；见 sql/ai_feedback_updated_at.sql")
+    old_created = "2026-01-01 00:00:00"
+    def totals():
+        agg = cost_report.aggregate(by="feedback", days=3650)
+        return {k: sum(r[k] for r in agg) for k in ("ratings", "up", "down", "edited")}
+
+    # 共享测试库里有别人/别的用例留下的评价 → 一律用**增量**断言，不假设表是空的
+    before = totals()
+    m1, m2, m3 = 990001, 990002, 990003              # message_id 是 BIGINT，不能用字符串
+    rows = [(m1, 7, 1, old_created),                 # 赞，没改过
+            (m2, 7, -1, old_created),                # 踩；随后被改（updated_at 自动更新）
+            (m3, 8, 1, old_created)]
+    try:
+        with conn.cursor() as cur:
+            for mid, uid, rating, created in rows:
+                cur.execute("INSERT INTO ai_feedback (message_id, user_id, rating, comment, created_at)"
+                            " VALUES (%s,%s,%s,%s,%s)", (mid, uid, rating, "自检", created))
+            # 制造一次"改过"：更新会触发 ON UPDATE CURRENT_TIMESTAMP
+            cur.execute("UPDATE ai_feedback SET rating=1 WHERE message_id=%s", (m2,))
+        conn.commit()
+
+        agg = cost_report.aggregate(by="feedback", days=3650)
+        assert agg, "应有按天聚合结果"
+        after = totals()
+        assert after["ratings"] - before["ratings"] == 3
+        # m2 先记 👎、随后被改成 👍 → 终态是 3 赞 0 踩
+        assert after["up"] - before["up"] == 3 and after["down"] - before["down"] == 0
+        assert after["edited"] - before["edited"] >= 1, "改过的评价必须被统计出来"
+
+        text = cost_report.render_feedback(agg, days=3650)
+        assert "满意度报表" in text and "改过" in text
+    finally:
+        with conn.cursor() as cur:
+            cur.execute("DELETE FROM ai_feedback WHERE message_id IN (%s,%s,%s)", (m1, m2, m3))
+        conn.commit()
+        conn.close()

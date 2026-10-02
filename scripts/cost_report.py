@@ -33,6 +33,14 @@ SCHEMA = {
                         " SUM(cache_hit) AS cache_hits"
                         " FROM ai_query_audit WHERE created_at >= NOW() - INTERVAL %s DAY"
                         " GROUP BY user_id ORDER BY cost_yuan DESC"),
+    # 满意度：赞/踩/被改过的次数。V10 给 ai_feedback 加了 updated_at ——
+    # updated_at > created_at 说明用户改过评价（原先完全看不出痕迹）。
+    "feedback": ("DATE(created_at)", "SELECT DATE(created_at) AS k, COUNT(*) AS ratings,"
+                                    " SUM(rating = 1) AS up,"
+                                    " SUM(rating = -1) AS down,"
+                                    " SUM(updated_at > created_at) AS edited"
+                                    " FROM ai_feedback WHERE created_at >= NOW() - INTERVAL %s DAY"
+                                    " GROUP BY DATE(created_at) ORDER BY k DESC"),
     "day": ("DATE(created_at)", "SELECT DATE(created_at) AS k, COUNT(*) AS requests,"
                                " SUM(prompt_tokens) AS prompt_tokens,"
                                " SUM(completion_tokens) AS completion_tokens,"
@@ -77,11 +85,32 @@ def aggregate(*, by: str = "user", days: int = 7, top: int | None = None) -> lis
     finally:
         conn.close()
     for row in rows:
+        if by == "feedback":
+            for key in ("ratings", "up", "down", "edited"):
+                row[key] = row[key] or 0
+            row["up_rate"] = round(row["up"] / row["ratings"], 3) if row["ratings"] else 0.0
+            continue
         for key in ("prompt_tokens", "completion_tokens", "cost_yuan", "denied", "cache_hits"):
             row[key] = row[key] or 0
         row["cost_yuan"] = float(row["cost_yuan"])
         row["cache_hit_rate"] = round(row["cache_hits"] / row["requests"], 3) if row["requests"] else 0.0
     return rows
+
+
+def render_feedback(rows: list[dict], *, days: int) -> str:
+    """满意度报表（按天）：赞 / 踩 / 满意率 / 被改过的评价数"""
+    lines = ["# AI 满意度报表（最近 %d 天，按天）" % days, "",
+             "| 日期 | 评价数 | 👍 | 👎 | 满意率 | 改过评价 |", "|---|---|---|---|---|---|"]
+    total = {"ratings": 0, "up": 0, "down": 0, "edited": 0}
+    for r in rows:
+        lines.append("| %s | %d | %d | %d | %.0f%% | %d |"
+                     % (r["k"], r["ratings"], r["up"], r["down"], r["up_rate"] * 100, r["edited"]))
+        for k in total:
+            total[k] += r[k]
+    rate = (total["up"] / total["ratings"] * 100) if total["ratings"] else 0.0
+    lines += ["", "合计：%d 条评价 · 👍%d / 👎%d · 满意率 %.0f%% · 其中 %d 条被改过"
+              % (total["ratings"], total["up"], total["down"], rate, total["edited"])]
+    return "\n".join(lines)
 
 
 def render(rows: list[dict], *, by: str, days: int) -> str:
@@ -101,8 +130,9 @@ def render(rows: list[dict], *, by: str, days: int) -> str:
 
 
 def main() -> None:
-    ap = argparse.ArgumentParser(description="从 ai_query_audit 聚合成本与用量")
-    ap.add_argument("--by", choices=("user", "day"), default="user")
+    ap = argparse.ArgumentParser(description="从 ai_query_audit / ai_feedback 聚合成本、用量与满意度")
+    ap.add_argument("--by", choices=("user", "day", "feedback"), default="user",
+                    help="user 按用户 · day 按天 · feedback 满意度（赞踩）")
     ap.add_argument("--days", type=int, default=7)
     ap.add_argument("--top", type=int, default=None)
     ap.add_argument("--json", action="store_true")
@@ -111,6 +141,8 @@ def main() -> None:
     rows = aggregate(by=args.by, days=args.days, top=args.top)
     if args.json:
         print(json.dumps(rows, ensure_ascii=False, indent=2, default=str))
+    elif args.by == "feedback":
+        print(render_feedback(rows, days=args.days))
     else:
         print(render(rows, by=args.by, days=args.days))
 

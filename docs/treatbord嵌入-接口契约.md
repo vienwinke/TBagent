@@ -55,7 +55,7 @@ L1/L2 契约里的 `session_id` 是**字符串**，而表内关联一律用 BIGI
 | GET | `/v1/ai/sessions` | `?limit=20` | `[{id, title, updated_at}]`（仅本人） | ✅ |
 | GET | `/v1/ai/sessions/{id}/messages` | — | `[{role, content, payload, created_at}]`；非本人 **404** | ✅ |
 | DELETE | `/v1/ai/sessions/{id}` | — | `204`；非本人 **404** | ✅ |
-| POST | `/v1/ai/feedback` | `{message_id, rating(1/-1), comment?}` | `204`；rating 非 1/-1 → **400**；`message_id` 非本人 → **404**（不泄露存在性）；落库失败 → **500 FEEDBACK_FAILED**（不假装成功）。`comment` 入库前**脱敏**（手机号/邮箱/长密钥串 → `[已脱敏]`）并截断 255 | ✅ |
+| POST | `/v1/ai/feedback` | `{message_id, rating(1/-1), comment?}` | `204`；rating 非 1/-1 → **400**；`message_id` 非本人 → **404**（不泄露存在性）；落库失败 → **500 FEEDBACK_FAILED**（不假装成功）。`comment` 入库前**脱敏**（手机号/邮箱/长密钥串 → `[已脱敏]`）并截断 255。表另含 `updated_at`（V10 起）：**`updated_at > created_at` 说明该评价被改过** —— 用于满意度与灰度评估（V11 把历史行对齐 created_at，避免加列时的回填假阳性）。满意度报表：`python scripts/cost_report.py --by feedback` | ✅ |
 | GET | `/healthz` | — | `{status:"ok"}`（进程存活） | ✅ |
 | GET | `/readyz` | — | `{status, llm_configured, db_readonly, policy_version, auth_configured}` | ✅ |
 | GET | `/metrics` | — | Prometheus 文本（请求数 / 拒绝数 / tokens / 成本） | ✅ |

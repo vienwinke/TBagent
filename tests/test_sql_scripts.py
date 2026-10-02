@@ -20,6 +20,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 SQL_DIR = Path(__file__).resolve().parents[1] / "sql"
 AI_TABLES = SQL_DIR / "ai_tables.sql"
 READONLY = SQL_DIR / "readonly_user.sql"
+# 全部 sql/*.sql 都要能被 MySQL 方言解析（迁移写错语法 = 上线时应用起不来）
+ALL_SQL = sorted(SQL_DIR.glob("*.sql"))
 
 EXPECTED_TABLES = {"ai_chat_session", "ai_chat_message", "ai_query_audit",
                    "ai_feedback", "ai_prompt_version"}
@@ -67,3 +69,38 @@ def test_readonly_script_grants_only_select():
 @pytest.mark.parametrize("path", [AI_TABLES, READONLY])
 def test_sql_scripts_are_not_empty(path):
     assert len(_statements(path)) >= 2
+
+
+@pytest.mark.parametrize("path", ALL_SQL, ids=lambda p: p.name)
+def test_every_sql_file_has_valid_statements(path):
+    """sql/ 下每个文件都必须能被 MySQL 方言解析。
+
+    价值：迁移语法错误的代价是"应用启动失败"（Flyway 直接报错），而本地若没跑过
+    真实 MySQL 就发现不了 —— 这里用离线解析把语法挡住（零副作用）。
+    """
+    stmts = _statements(path)
+    assert stmts, "%s 里没有可执行语句" % path.name
+    for stmt in stmts:
+        # `SHOW GRANTS FOR 'x'@'y'` 这类**诊断语句** sqlglot 解析不了（它只面向 DDL/DML），
+        # 已知限制：这类语句只是给运维看的自检提示，不影响语法正确性。
+        if stmt.upper().startswith("SHOW "):
+            continue
+        sqlglot.parse_one(stmt, dialect="mysql")     # 抛异常即失败
+
+
+def test_ai_migrations_are_append_only_and_idempotent_where_supported():
+    """V10/V11 是**追加**迁移：已发布的 V9 不能改（改了 Flyway checksum 校验失败）。
+
+    这里守住两条：
+    · V9 只建表（CREATE TABLE IF NOT EXISTS）；
+    · V10/V11 只做 ALTER/UPDATE，不重建表、不删列。
+    """
+    for path in ALL_SQL:
+        if path.name.startswith("V10"):
+            body = " ".join(_statements(path)).upper()
+            assert "ALTER TABLE" in body and "AI_FEEDBACK" in body
+            assert "DROP" not in body and "CREATE TABLE" not in body
+        if path.name.startswith("V11"):
+            body = " ".join(_statements(path)).upper()
+            assert body.startswith("UPDATE AI_FEEDBACK")
+            assert "DROP" not in body

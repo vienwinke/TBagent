@@ -86,6 +86,8 @@ jobs:
       - name: 建表（ai_* 真实 DDL + 最小业务 fixture）
         run: |
           mysql -h127.0.0.1 -uci -pci tb_ci < sql/ai_tables.sql
+          # 当前 schema = V9 + V10（V10 给 ai_feedback 加 updated_at，满意度报表要用）
+          mysql -h127.0.0.1 -uci -pci tb_ci < sql/ai_feedback_updated_at.sql
           mysql -h127.0.0.1 -uci -pci tb_ci < sql/test_fixture.sql
           echo "--- 已建表 ---"
           mysql -h127.0.0.1 -uci -pci tb_ci -e "SHOW TABLES"
