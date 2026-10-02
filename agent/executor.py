@@ -24,6 +24,51 @@ from config import DB, GUARD, IS_SQLITE, SENSITIVE_COLUMNS
 
 MASK = "[已脱敏]"
 
+
+def jsonable(value: Any) -> Any:
+    """把数据库原值转成 **JSON 原生类型**（SSE / Streamlit / 图表都能直接序列化）。
+
+    为什么必须在**执行层**做：pymysql 原样返回 `Decimal` / `datetime` / `date` / `time` /
+    `timedelta` / `bytes`，而 `json.dumps` 对它们一律抛 TypeError。此前崩溃发生在边车
+    序列化 SSE 帧时 —— 流中途异常把连接掐了，Java 侧报"边车不可达: I/O error ... closed"，
+    排查方向被完全带偏（实测：只要 SQL 投影出金额或时间列就 100% 崩）。
+
+    为什么不给 `json.dumps` 加 `default=str`：那会把金额变成**字符串**，
+    前端格式化与数值排序都会受影响，而且只是掩盖问题。这里做语义正确的转换。
+
+    转换规则：
+    · `Decimal`  → float（本库金额为 2 位小数，float 显示安全；精确值仍在库里与审计表里）
+    · `datetime` → "YYYY-MM-DD HH:MM:SS[.ffffff]"（可读且可排序）
+    · `date`/`time` → ISO 字符串
+    · `timedelta`（MySQL TIME 列）→ "HH:MM:SS"
+    · `bytes` → UTF-8 解码（非法字节替换，不抛）
+    · int / float / str / bool / None 原样返回
+    """
+    import datetime as _dt
+    from decimal import Decimal
+
+    if value is None or isinstance(value, (int, float, str, bool)):
+        return value
+    if isinstance(value, Decimal):
+        return float(value)
+    if isinstance(value, _dt.datetime):          # 必须在 date 之前判：datetime 是 date 的子类
+        return value.isoformat(sep=" ")
+    if isinstance(value, (_dt.date, _dt.time)):
+        return value.isoformat()
+    if isinstance(value, _dt.timedelta):
+        total = int(value.total_seconds())
+        sign = "-" if total < 0 else ""
+        total = abs(total)
+        return "%s%02d:%02d:%02d" % (sign, total // 3600, (total % 3600) // 60, total % 60)
+    if isinstance(value, (bytes, bytearray)):
+        return bytes(value).decode("utf-8", "replace")
+    return str(value)                            # 兜底：保证一定可序列化
+
+
+def jsonable_rows(rows: Iterable[Sequence[Any]]) -> list[tuple]:
+    """按行归一化（返回 tuple，保持与 QueryResult.rows 的类型一致）"""
+    return [tuple(jsonable(v) for v in row) for row in rows]
+
 MYSQL_HINTS = {
     1792: "（会话为只读事务，写操作/DDL 已被 MySQL 拒绝）",
     # SQLite（公开演示快照）保留同样语义
@@ -263,7 +308,8 @@ def execute_readonly(
     result.masked_columns = source_names or output_cols
     result.masked_output_columns = output_cols
     result.sensitive_columns = source_names
-    result.columns, result.rows = columns, rows
+    # ★ 归一化成 JSON 原生类型：此处统一处理，SSE / Streamlit / 图表 spec 全都受益
+    result.columns, result.rows = columns, jsonable_rows(rows)
     result.row_count = len(rows)
     result.elapsed_ms = int((time.time() - started) * 1000)
     logger.debug("[exec] {} 行 / {}ms / 命中敏感列={} / 脱敏输出列={} / 预估扫描={}",

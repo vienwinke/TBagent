@@ -87,6 +87,7 @@ L1/L2 契约里的 `session_id` 是**字符串**，而表内关联一律用 BIGI
 | `route` | `route`（`chat`/`knowledge`/`data`） | 路由后 | 可忽略 |
 | `sql` | `sql, tables` | 数据分支生成后 | **仅 ADMIN 下发**；USER 只收 `has_sql:true` |
 | `table` | `columns, rows, row_count, truncated, masked_columns` | 执行成功 | 表格卡片 |
+| 结果值类型 | ✅ **契约级保证**：`table` 的 `rows` 一律是 **JSON 原生类型** —— 金额/小数 → 数字（float）、时间 → 字符串（`"YYYY-MM-DD HH:MM:SS"`）、二进制 → UTF-8 字符串。由**执行层**统一归一化（`agent/executor.py: jsonable`），前端**不需要**再处理 Decimal/datetime。（此前未归一化：投影出金额或时间列时 SSE 序列化抛 TypeError、连接被掐，而上游只看到"边车不可达" —— 实测踩到） |
 | `chart` | `kind, x, y, title, reason` | 选图后 | `metric/line/bar/barh/pie/table` |
 | `delta` | `text` | 生成答案时 | 打字机增量拼接 |
 | `citations` | `[{title, snippet}]` | 知识分支 | 折叠展示，可核查 |
