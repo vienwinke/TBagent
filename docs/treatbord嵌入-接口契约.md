@@ -40,6 +40,8 @@
 `Authorization: Bearer <内部JWT>`；**未配置密钥时仍 fail-closed 返回 503**，
 本地联调可临时用 `SIDECAR_DEV_PRINCIPAL=7:USER`（配了密钥就只认 JWT，开发身份自动失效）。
 
+**类型约束（硬）**：契约里的 `session_id` 是**字符串**（外部标识），表内主键是 BIGINT。服务层必须先经 `agent/session.py:resolve()` 解析；把字符串当主键传会直接 `TypeError`（防的是把字符串塞进 BIGINT 列这类线上故障，已踩过两次）。
+
 **会话归属（设计决策，2026-10-01）**：会话由**边车**持有（`ai_chat_session` / `ai_chat_message`）。
 L1/L2 契约里的 `session_id` 是**字符串**，而表内关联一律用 BIGINT 主键 —— 两者通过
 `ai_chat_session.external_id` 衔接（唯一索引）。**绝不把字符串塞进 BIGINT 列**。
@@ -89,7 +91,8 @@ L1/L2 契约里的 `session_id` 是**字符串**，而表内关联一律用 BIGI
 | `delta` | `text` | 生成答案时 | 打字机增量拼接 |
 | `citations` | `[{title, snippet}]` | 知识分支 | 折叠展示，可核查 |
 | `guard` | `action, note` | 触发护栏时 | 提示条：`masked`/`limit_added`/`truncated`/`denied` |
-| `done` | `elapsed_ms, tokens, cost_yuan, cache_hit, repaired, attempts, clarify?` | 收尾 | 只展示 elapsed_ms。`clarify=true` 表示指代不明、已向用户追问（事件序：scope → delta(追问话术) → done） |
+| `saved` | `session_id, message_id` | `done` 之前（仅 `SESSION_ENABLED=true`） | 前端据此把 👍/👎 关联到具体回答；**未知事件一律忽略**，别因为多了个事件就崩 |
+| `done` | `elapsed_ms, tokens, cost_yuan, cache_hit, repaired, attempts, clarify?` | 收尾 | 只展示 elapsed_ms。`clarify=true` 表示指代不明、已向用户追问（事件序：scope → delta(追问话术) → done）。**`tokens`/`cost_yuan` 是本请求真实用量**：闲聊与规则拒答为 **0**（不调模型）；端到端预算耗尽时也会如实报出已消耗的量（不是 0） |
 | `error` | `code, message, retryable` | 失败 | 见 §2.4 |
 
 示例（一次完整的用户版问答）：

@@ -194,6 +194,12 @@ def answer_stream(question: str, principal: Principal, *,
     **只在服务端流转、绝不发给客户端** —— 普通用户的 SSE 里只有 `has_sql:true`（契约 §2.3），
     但审计（§4）需要留下 generated_sql / rewritten_sql 以便追溯。sink 抛异常不影响问答。
     """
+    # 类型守卫（同类错误咬过两次：字符串 session_id 被塞进 BIGINT 列 → MySQL 报
+    # Incorrect integer value）。外部字符串 session_id 属于 ai_chat_session.external_id，
+    # 与会话主键是两码事，必须由调用方先解析（agent/session.py 的 resolve）。
+    if session_ref is not None and not isinstance(session_ref, int):
+        raise TypeError("session_ref 必须是会话主键（int）；外部字符串 session_id 不能当主键用")
+
     with llm_mod.isolated_usage():
         for event, data in _answer_stream(question, principal, session_id=session_id,
                                           trace_id=trace_id, history=history, deps=deps,
@@ -285,7 +291,7 @@ def _answer_stream(question: str, principal: Principal, *,
 
     if route == router.CHAT:
         yield "delta", {"text": CHAT_REPLY}
-        yield "_audit", _audit_payload(trace, principal, question, session_id, before,
+        yield "_audit", _audit_payload(trace, principal, question, session_ref, before,
                                        scope=decision.scope, verdict="ok", route=route)
         yield "done", _done(started, before, route=route, cache_hit=False, repaired=False,
                             attempts=0)

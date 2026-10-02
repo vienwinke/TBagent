@@ -23,6 +23,7 @@
 from __future__ import annotations
 
 import json
+import contextvars
 import os
 import threading
 import time
@@ -179,6 +180,7 @@ def _stream(req: ChatRequest, principal: Principal, trace_id: str | None, idem_k
     denied = error = False
     tokens, cost = 0, 0.0
     route: str | None = None
+    pending_done: dict[str, Any] | None = None
 
     def emit(event: str, data: dict[str, Any]) -> str:
         frame = _sse(event, data)
@@ -195,7 +197,20 @@ def _stream(req: ChatRequest, principal: Principal, trace_id: str | None, idem_k
         # 会话锁已在端点取得、由本生成器在 finally 释放（见 chat 端点的 acquire_session）
         chunks.append(": connected\n\n")     # 首字节：尽早给前端反馈
         yield chunks[-1]                    # 也进幂等缓冲，重放才能逐字节一致
-        for event, data in pipeline.answer_stream(
+        # ★ 必须在**同一个 Context** 里推进生成器（而不是 `for ... in` 直接迭代）。
+        #   原因：Starlette 会把这个同步生成器放到线程池里**分步**推进，而每一步都在
+        #   "当前调用上下文的一份拷贝"里执行 —— 于是 pipeline 在第一步用
+        #   `isolated_usage()` 设置的 ContextVar，到第二步就看不见了，`llm.usage()`
+        #   回落到**进程级全局 USAGE**。现象极其反直觉：一个 8ms、压根没调模型的
+        #   "你好"请求，done 里却报出全局累计的 3015 tokens / ¥0.0089；
+        #   而且并发时各请求的数字会互相污染。
+        #   钉住一个 Context 之后，每次 `next()` 都在同一作用域里，账目才对得上。
+        ctx = contextvars.copy_context()
+        # 服务层显式持有本请求的用量作用域：这样"超时/异常"等没有 done 事件的路径
+        # 也能如实报账（模型已经烧掉的 token 不会被吞掉）。
+        request_usage = llm_mod.Usage()
+        ctx.run(llm_mod.bind_usage, request_usage)
+        events = pipeline.answer_stream(
                 req.question, principal,
                 session_id=req.session_id,
                 session_ref=session_ref,
@@ -203,7 +218,12 @@ def _stream(req: ChatRequest, principal: Principal, trace_id: str | None, idem_k
                 trace_id=trace_id,
                 deps=_deps_for(budget_s),
                 # 审计落库（AUDIT_ENABLED，默认关闭）：sink 抛异常不影响问答，见 agent/audit.py
-                audit_sink=audit_mod.record if audit_mod.enabled() else None):
+                audit_sink=audit_mod.record if audit_mod.enabled() else None)
+        while True:
+            try:
+                event, data = ctx.run(next, events)
+            except StopIteration:
+                break
             if event == "done":
                 denied = bool(data.get("denied"))
                 tokens, cost = int(data.get("tokens", 0)), float(data.get("cost_yuan", 0.0))
@@ -214,8 +234,13 @@ def _stream(req: ChatRequest, principal: Principal, trace_id: str | None, idem_k
                 answer_parts.append(data.get("text", ""))
             elif event == "error":
                 error = True
+            if event == "done":
+                # ★ `done` 是契约里的收尾帧，必须最后发：先暂存，等会话落库（saved 事件）之后再发。
+                #   否则前端按"见到 done 就收工"实现时会漏掉 saved（拿不到 message_id，反馈就没法用）。
+                pending_done = data
+                break
             yield emit(event, data)
-            if event in ("done", "error"):
+            if event == "error":
                 break
             if time.monotonic() > deadline:
                 # 预算耗尽：给诚实降级（不是 500，也不假装成功）
@@ -224,17 +249,34 @@ def _stream(req: ChatRequest, principal: Principal, trace_id: str | None, idem_k
                                      "message": "端到端预算 %dms 已耗尽（模型侧超时）"
                                                 % int(budget_s * 1000),
                                      "retryable": True})
-                yield emit("done", {"elapsed_ms": int(budget_s * 1000), "route": route,
-                                    "denied": False, "tokens": tokens, "cost_yuan": cost,
-                                    "timeout": True, "cache_hit": False,
-                                    "repaired": False, "attempts": 0})
+                # 超时也要**如实报账**：模型已经在烧 token 了，报 0 会让成本统计偏小。
+                # request_usage 是服务层直接持有的对象（不依赖 ContextVar 可见性）。
+                timeout_tokens, timeout_cost = tokens, cost
+                try:
+                    summary = request_usage.summary()
+                    timeout_tokens = summary["total_tokens"]
+                    timeout_cost = summary["cost_yuan"]
+                except Exception:  # noqa: BLE001  取不到就退回原值，别因为统计再抛错
+                    pass
+                pending_done = {"elapsed_ms": int(budget_s * 1000), "route": route,
+                                "denied": False, "tokens": timeout_tokens,
+                                "cost_yuan": timeout_cost,
+                                "timeout": True, "cache_hit": False,
+                                "repaired": False, "attempts": 0}
                 break
         if session_ref:
-            session_mod.append_turn(session_ref, principal.user_id, req.question,
-                                    "\n".join(t for t in answer_parts if t),
-                                    payload={"trace_id": trace_id, "route": route,
-                                             "denied": denied, "tokens": tokens,
-                                             "cost_yuan": cost})
+            message_id = session_mod.append_turn(
+                    session_ref, principal.user_id, req.question,
+                    "\n".join(t for t in answer_parts if t),
+                    payload={"trace_id": trace_id, "route": route,
+                             "denied": denied, "tokens": tokens, "cost_yuan": cost})
+            if message_id:
+                # 补充事件：让前端拿到"这条回答的消息 id"，反馈（👍/👎）才关联得上。
+                # 旧版本客户端忽略未知事件即可（Java 收集器与小程序解析器都是这样）。
+                yield emit("saved", {"session_id": session_ref, "message_id": message_id})
+
+        if pending_done is not None:
+            yield emit("done", pending_done)
         if idem_key:
             LIMITER.remember(idem_key, "".join(chunks))
     finally:

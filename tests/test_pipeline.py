@@ -9,6 +9,8 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
+import pytest
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from agent import pipeline, rag, router  # noqa: E402
@@ -334,3 +336,18 @@ def test_history_without_denial_does_not_block_followup():
     hist = "用户：我接了几个任务\n助手：你接了 8 个任务。"
     evs = run("那上周呢", USER, use_cache=False, history=hist, deps=NL2SQL_DEPS)
     assert payload(evs, "scope")[0]["allowed"] is True
+
+
+def test_session_ref_must_be_an_integer():
+    """类型守卫：外部字符串 session_id 不能当会话主键用（否则 MySQL 报 Incorrect integer）"""
+    with pytest.raises(TypeError, match="session_ref"):
+        list(pipeline.answer_stream("你好", USER, use_cache=False, deps=NL2SQL_DEPS,
+                                    session_ref="s_from_client"))
+
+
+def test_audit_never_receives_string_session_id():
+    """审计里的 session_id 必须是 int 或 None —— 曾经把外部字符串塞进去过"""
+    got = []
+    list(pipeline.answer_stream("你好", USER, use_cache=False, deps=NL2SQL_DEPS,
+                                audit_sink=got.append))
+    assert got and (got[0]["session_id"] is None or isinstance(got[0]["session_id"], int))

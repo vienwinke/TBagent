@@ -96,10 +96,14 @@ def history_text(external_id: str, user_id: int, *, limit: int = 6) -> str:
 
 
 def append_turn(session_id: int, user_id: int, question: str, answer: str,
-                *, payload: dict | None = None) -> bool:
-    """落一轮对话（用户消息 + 助手消息），并推进会话的 updated_at"""
+                *, payload: dict | None = None) -> int | None:
+    """落一轮对话（用户消息 + 助手消息），并推进会话的 updated_at。
+
+    返回**助手消息 id**（`ai_chat_message.id`）—— 用户反馈（👍/👎）要按它落库，
+    没有这个 id，"反馈"就无从关联到具体回答。失败返回 None。
+    """
     if not enabled() or not session_id:
-        return False
+        return None
     try:
         with _connect() as conn, conn.cursor() as cur:
             cur.execute("INSERT INTO ai_chat_message (session_id, user_id, role, content)"
@@ -108,13 +112,14 @@ def append_turn(session_id: int, user_id: int, question: str, answer: str,
                         " VALUES (%s,%s,%s,%s,%s)",
                         (session_id, user_id, "assistant", answer,
                          json.dumps(payload or {}, ensure_ascii=False)))
+            message_id = int(cur.lastrowid)
             cur.execute("UPDATE ai_chat_session SET updated_at=NOW()"
                         " WHERE id=%s AND user_id=%s", (session_id, user_id))
-        return True
+        return message_id
     except Exception as exc:  # noqa: BLE001
         logger.warning("[session] 消息落库失败（不影响本次回答）：{}: {}",
                        type(exc).__name__, str(exc)[:140])
-        return False
+        return None
 
 
 # ------------------------------------------------------------------ 契约 §2.1 的会话端点

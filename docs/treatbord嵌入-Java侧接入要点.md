@@ -43,7 +43,18 @@ String issueAiToken(long userId, String role, String sessionJti) {   // ★ sess
 每次新生成 jti 的话，登出后边车仍能用旧 token 继续查（最长 5 分钟窗口）。
 （已实测：Java 签发 → 边车 200 → 写黑名单 → 同一 token 401 → 移出黑名单 → 200。）
 
-**已生成的骨架**（`com.treatbord.module.ai`，编译与单测均已通过；**未提交，等你 review**）：
+## 实测踩到的三个坑（L3 端到端验证，2026-10-02）
+
+1. **JDK HttpClient 会对明文端口尝试 h2c 升级**（发 `Upgrade: h2c` + `HTTP2-Settings` +
+   `Transfer-encoding: chunked`）。边车是 uvicorn，不支持该升级 → **请求体被丢掉**，
+   边车报 `422 {'loc':['body'],'msg':'Field required'}`；而用 curl/Postman 测同一接口完全正常，
+   极难定位（最后靠抓包才看到）。修法：`HttpClient.newBuilder().version(HTTP_1_1)`。
+2. **键名必须 snake_case**：请求体走 L2 契约（`session_id` / `client_msg_id` / `message_id`），
+   Java record 上要加 `@JsonProperty`，否则序列化成 camelCase → 边车 **422**。
+3. **`RestClient` 的 `spec.body(x)` 返回的是新对象**，不接住等于没挂 body（同样表现为 422 且 body 为空）。
+   另外错误信息要带上响应体，否则只有状态码，排查只能靠猜。
+
+## 已生成的骨架（`com.treatbord.module.ai`，编译与单测均已通过；**未提交，等你 review**）：
 `AiChatController`（SSE 代理）· `AiSidecarClient`（逐行转发 + trace 贯穿）· `AiTokenService`（内部 JWT）·
 `AiChatRequest`（**无 user_id 字段**）· `AiSidecarConfig`（转发线程池）· `AiTokenServiceTest`（6 条）。
 配置键（有默认值，可只加环境变量）：`treatbord.ai.sidecar.base-url / jwt-secret / timeout-ms / token-ttl-seconds`。

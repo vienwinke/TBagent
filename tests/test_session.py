@@ -51,7 +51,7 @@ def test_disabled_by_default_never_touches_db(monkeypatch):
     assert sess.enabled() is False
     assert sess.resolve("s1", 7, question="q") is None
     assert sess.history_text("s1", 7) == ""
-    assert sess.append_turn(1, 7, "q", "a") is False
+    assert sess.append_turn(1, 7, "q", "a") is None
 
 
 def test_persist_failure_is_swallowed(monkeypatch):
@@ -63,7 +63,7 @@ def test_persist_failure_is_swallowed(monkeypatch):
     monkeypatch.setattr(sess, "_connect", boom)
     assert sess.resolve("s1", 7, question="q") is None      # 降级为"无会话"
     assert sess.history_text("s1", 7) == ""                 # 降级为"无历史"
-    assert sess.append_turn(1, 7, "q", "a") is False
+    assert sess.append_turn(1, 7, "q", "a") is None
 
 
 @needs_mysql
@@ -76,7 +76,8 @@ def test_resolve_is_idempotent_and_history_round_trips(store):
     sid7 = sess.resolve(ext, 7, question="再问一次")
     assert sid7 == sid, "同一用户 + 同一 external_id 必须复用会话"
 
-    assert sess.append_turn(sid, 7, "我接了几个任务？", "你接了 8 个任务。") is True
+    message_id = sess.append_turn(sid, 7, "我接了几个任务？", "你接了 8 个任务。")
+    assert message_id, "要返回助手消息 id（反馈按它落库）"
     text = sess.history_text(ext, 7)
     assert "用户：我接了几个任务？" in text and "助手：你接了 8 个任务。" in text
     assert text.index("用户：") < text.index("助手："), "历史必须按时间正序"

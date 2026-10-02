@@ -206,3 +206,46 @@ def test_within_budget_no_timeout_event(client, monkeypatch):
     monkeypatch.setenv("SIDECAR_TIMEOUT_MS", "8000")
     r = client.post("/v1/ai/chat", json=BODY)
     assert "event: error" not in r.text and '"timeout": true' not in r.text
+
+
+# ------------------------------------------------------------------ 预算耗尽：也要如实报账
+def test_timeout_reports_tokens_already_burned(monkeypatch):
+    """边车预算耗尽时，模型已经烧掉的 token 必须报出来（报 0 会让成本统计偏小）。
+
+    用"先记账、再慢慢睡"的桩把预算耗光：pipeline 侧没有 done 可复用，
+    所以这条路径只能靠"从固定 Context 里读本请求用量"来补账 —— 这里把它钉住。
+    """
+    import llm as llm_mod
+    from agent.pipeline import Deps
+
+    def slow_accounting_llm(messages):
+        scope = llm_mod.usage()          # 先记账（模拟模型已消耗）
+        scope.calls += 1
+        scope.prompt_tokens += 800
+        scope.completion_tokens += 40
+        time.sleep(1.2)                  # 再拖过预算
+        return {"sql": "SELECT COUNT(*) AS c FROM task WHERE deleted = 0",
+                "reason": "慢", "tables": ["task"]}
+
+    monkeypatch.setenv("SIDECAR_DEV_PRINCIPAL", "2:USER")
+    monkeypatch.setenv("SIDECAR_TIMEOUT_MS", "300")
+    monkeypatch.delenv("SIDECAR_JWT_SECRET", raising=False)
+    monkeypatch.setattr(sidecar, "DEPS", Deps(nl2sql_llm=slow_accounting_llm,
+                                              summary_llm=lambda m: "ok"))
+    sidecar.LIMITER.reset()
+    sidecar.STATS.reset()
+
+    res = TestClient(sidecar.app).post("/v1/ai/chat",
+                                       json={"session_id": "s-timeout", "question": "待接取的任务有几个？",
+                                             "client_msg_id": "t1"})
+    done = None
+    for line in res.text.splitlines():
+        if done is None and line.startswith("data:"):
+            pass
+    import json as _json
+    import re as _re
+    match = _re.search(r"event: done\s*\ndata: (.*)", res.text)
+    assert match, res.text[:400]
+    done = _json.loads(match.group(1))
+    assert done.get("timeout") is True, done
+    assert done["tokens"] >= 840, "超时也要报出已消耗的 token：%s" % done["tokens"]

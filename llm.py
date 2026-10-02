@@ -118,6 +118,17 @@ def usage() -> Usage:
     return _CURRENT_USAGE.get() or USAGE
 
 
+def bind_usage(scope: Usage) -> None:
+    """把给定用量作用域绑定到**当前 Context**（供服务层在固定 Context 里调用）。
+
+    为什么需要它：SSE 消费方（Starlette）会把同步生成器分步推进，每一步都在上下文的
+    拷贝里执行 —— 只用 `isolated_usage()` 的话，作用域的可见性会丢，账目就错了。
+    服务层先 `ctx = contextvars.copy_context()`，再 `ctx.run(bind_usage, scope)`，
+    之后自己**直接持有** scope 对象，超时等异常路径也能如实报账。
+    """
+    _CURRENT_USAGE.set(scope)
+
+
 @contextlib.contextmanager
 def isolated_usage() -> Iterator[Usage]:
     """为一次请求开独立的用量作用域（**可重入**）。
