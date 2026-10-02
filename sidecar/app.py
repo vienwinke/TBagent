@@ -36,6 +36,7 @@ from pydantic import BaseModel, Field
 import llm as llm_mod
 from config import LLM
 from agent import audit as audit_mod
+from agent import session as session_mod
 from agent import pipeline, policy
 from sidecar import auth
 from sidecar.denylist import make_denylist
@@ -162,6 +163,10 @@ def _deps_for(budget_s: float) -> Deps | None:
         summary_llm=lambda messages: llm_mod.chat(messages, temperature=0, max_tokens=256,
                                                   tag="summary", model=LLM.model_cheap,
                                                   timeout=remaining),
+        # 多轮指代消解也是"便宜档"的活：输入是短对话，输出一个 JSON
+        rewrite_llm=lambda messages: llm_mod.chat_json(messages, tag="rewrite",
+                                                       model=LLM.model_cheap,
+                                                       timeout=remaining),
     )
 
 
@@ -180,6 +185,12 @@ def _stream(req: ChatRequest, principal: Principal, trace_id: str | None, idem_k
         chunks.append(frame)
         return frame
 
+    # 会话（SESSION_ENABLED，默认关闭）：把 L1 的字符串 session_id 解析成会话主键，
+    # 取最近几轮历史用于指代消解；同样带 user_id 过滤 —— 拿别人的 id 也读不到别人的历史。
+    session_ref = session_mod.resolve(req.session_id, principal.user_id, question=req.question)
+    history = session_mod.history_text(req.session_id, principal.user_id)
+    answer_parts: list[str] = []
+
     try:
         # 会话锁已在端点取得、由本生成器在 finally 释放（见 chat 端点的 acquire_session）
         chunks.append(": connected\n\n")     # 首字节：尽早给前端反馈
@@ -187,6 +198,8 @@ def _stream(req: ChatRequest, principal: Principal, trace_id: str | None, idem_k
         for event, data in pipeline.answer_stream(
                 req.question, principal,
                 session_id=req.session_id,
+                session_ref=session_ref,
+                history=history,
                 trace_id=trace_id,
                 deps=_deps_for(budget_s),
                 # 审计落库（AUDIT_ENABLED，默认关闭）：sink 抛异常不影响问答，见 agent/audit.py
@@ -197,6 +210,8 @@ def _stream(req: ChatRequest, principal: Principal, trace_id: str | None, idem_k
                 route = data.get("route")
             elif event == "route":
                 route = data.get("route")
+            elif event == "delta":
+                answer_parts.append(data.get("text", ""))
             elif event == "error":
                 error = True
             yield emit(event, data)
@@ -214,6 +229,12 @@ def _stream(req: ChatRequest, principal: Principal, trace_id: str | None, idem_k
                                     "timeout": True, "cache_hit": False,
                                     "repaired": False, "attempts": 0})
                 break
+        if session_ref:
+            session_mod.append_turn(session_ref, principal.user_id, req.question,
+                                    "\n".join(t for t in answer_parts if t),
+                                    payload={"trace_id": trace_id, "route": route,
+                                             "denied": denied, "tokens": tokens,
+                                             "cost_yuan": cost})
         if idem_key:
             LIMITER.remember(idem_key, "".join(chunks))
     finally:
@@ -292,6 +313,7 @@ def readyz() -> dict[str, Any]:
             "limiter": LIMITER.backend(),
             "denylist": DENYLIST.backend(),          # memory（单副本）或 redis（多副本共享）
             "audit_enabled": audit_mod.enabled(),
+            "session_enabled": session_mod.enabled(),
             "audit": audit_mod.stats(),
             "dev_principal": bool(os.getenv("SIDECAR_DEV_PRINCIPAL", "").strip())}
 
@@ -321,6 +343,92 @@ def metrics() -> Any:
     from fastapi.responses import PlainTextResponse
 
     return PlainTextResponse("\n".join(lines), media_type="text/plain; version=0.0.4")
+
+
+class FeedbackRequest(BaseModel):
+    """契约 §2.1：`{message_id, rating(1/-1), comment?}`"""
+
+    message_id: int
+    rating: int
+    comment: str | None = Field(default=None, max_length=255)
+
+
+def _principal_or_error(request: Request) -> tuple[Principal | None, Any]:
+    """会话类端点的统一鉴权：401（认证失败）/ 503（未配置密钥）"""
+    try:
+        return principal_from_request(request), None
+    except auth.AuthError as exc:
+        status = 503 if exc.code == "AUTH_NOT_CONFIGURED" else 401
+        return None, JSONResponse(status_code=status,
+                                  content={"code": exc.code, "message": str(exc),
+                                           "retryable": False})
+
+
+def _session_disabled() -> JSONResponse:
+    """会话存储没打开时如实说，而不是返回空列表让人误以为真的没有历史。"""
+    return JSONResponse(status_code=503,
+                        content={"code": "SESSION_DISABLED",
+                                 "message": "会话存储未启用（SESSION_ENABLED=false）；"
+                                            "建好 ai_* 表后打开该开关",
+                                 "retryable": False})
+
+
+@app.get("/v1/ai/sessions")
+def list_sessions(request: Request, limit: int = 20) -> Any:
+    """会话列表（只列**本人**的）"""
+    principal, err = _principal_or_error(request)
+    if err is not None:
+        return err
+    if not session_mod.enabled():
+        return _session_disabled()
+    return session_mod.list_sessions(principal.user_id, limit=limit)
+
+
+@app.get("/v1/ai/sessions/{session_id}/messages")
+def list_messages(session_id: int, request: Request) -> Any:
+    """会话消息；非本人的会话一律 **404**（不泄露"这个会话存在"）"""
+    principal, err = _principal_or_error(request)
+    if err is not None:
+        return err
+    if not session_mod.enabled():
+        return _session_disabled()
+    messages = session_mod.list_messages(session_id, principal.user_id)
+    if messages is None:
+        return JSONResponse(status_code=404,
+                            content={"code": "NOT_FOUND", "message": "会话不存在",
+                                     "retryable": False})
+    return messages
+
+
+@app.delete("/v1/ai/sessions/{session_id}")
+def delete_session(session_id: int, request: Request) -> Any:
+    """删除会话（含消息）；非本人的会话 404"""
+    principal, err = _principal_or_error(request)
+    if err is not None:
+        return err
+    if not session_mod.enabled():
+        return _session_disabled()
+    if not session_mod.delete_session(session_id, principal.user_id):
+        return JSONResponse(status_code=404,
+                            content={"code": "NOT_FOUND", "message": "会话不存在",
+                                     "retryable": False})
+    return JSONResponse(status_code=204, content=None)
+
+
+@app.post("/v1/ai/feedback")
+def feedback(req: FeedbackRequest, request: Request) -> Any:
+    """用户反馈 👍/👎（rating 只接受 1 / -1）"""
+    principal, err = _principal_or_error(request)
+    if err is not None:
+        return err
+    if req.rating not in (1, -1):
+        return JSONResponse(status_code=400,
+                            content={"code": "BAD_REQUEST", "message": "rating 只能是 1 或 -1",
+                                     "retryable": False})
+    if not session_mod.enabled():
+        return _session_disabled()
+    session_mod.save_feedback(req.message_id, principal.user_id, req.rating, req.comment or "")
+    return JSONResponse(status_code=204, content=None)
 
 
 def main() -> None:

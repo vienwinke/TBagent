@@ -33,20 +33,27 @@
 
 ### 2.1 端点
 
-状态（2026-10-01）：✅ 已实现并测试 · ⬜ 待做（会话/审计属 P2）
+状态（2026-10-01）：**§2.1 全部 8 个端点已实现并测试**（含鉴权与用户隔离）
 
 **鉴权已实现**（HS256 内部 JWT，标准库实现，见 `sidecar/auth.py`）。启用方式：
 配置 `SIDECAR_JWT_SECRET`（与 treatbord 侧同一密钥）后，`/v1/ai/chat` 只认
 `Authorization: Bearer <内部JWT>`；**未配置密钥时仍 fail-closed 返回 503**，
 本地联调可临时用 `SIDECAR_DEV_PRINCIPAL=7:USER`（配了密钥就只认 JWT，开发身份自动失效）。
 
+**会话归属（设计决策，2026-10-01）**：会话由**边车**持有（`ai_chat_session` / `ai_chat_message`）。
+L1/L2 契约里的 `session_id` 是**字符串**，而表内关联一律用 BIGINT 主键 —— 两者通过
+`ai_chat_session.external_id` 衔接（唯一索引）。**绝不把字符串塞进 BIGINT 列**。
+所有会话读写都带 `user_id` 过滤：拿别人的 `external_id` 只会命中/创建自己的会话。
+开关：`SESSION_ENABLED`（默认关闭，建好表后打开）；未开启时四个会话端点返回 **503 SESSION_DISABLED**
+（如实说明，而不是回空列表让人误以为真没有历史）。
+
 | 方法 | 路径 | 请求 | 响应 | 状态 |
 |---|---|---|---|---|
 | POST | `/v1/ai/chat` | `{session_id, question, client_msg_id}` | `text/event-stream`（§2.3） | ✅ |
-| GET | `/v1/ai/sessions` | `?limit=20` | `[{id, title, updated_at}]` | ⬜ |
-| GET | `/v1/ai/sessions/{id}/messages` | — | `[{role, content, payload, created_at}]` | ⬜ |
-| DELETE | `/v1/ai/sessions/{id}` | — | `204` | ⬜ |
-| POST | `/v1/ai/feedback` | `{message_id, rating(1/-1), comment?}` | `204` | ⬜ |
+| GET | `/v1/ai/sessions` | `?limit=20` | `[{id, title, updated_at}]`（仅本人） | ✅ |
+| GET | `/v1/ai/sessions/{id}/messages` | — | `[{role, content, payload, created_at}]`；非本人 **404** | ✅ |
+| DELETE | `/v1/ai/sessions/{id}` | — | `204`；非本人 **404** | ✅ |
+| POST | `/v1/ai/feedback` | `{message_id, rating(1/-1), comment?}` | `204`（rating 非 1/-1 → 400） | ✅ |
 | GET | `/healthz` | — | `{status:"ok"}`（进程存活） | ✅ |
 | GET | `/readyz` | — | `{status, llm_configured, db_readonly, policy_version, auth_configured}` | ✅ |
 | GET | `/metrics` | — | Prometheus 文本（请求数 / 拒绝数 / tokens / 成本） | ✅ |
@@ -74,7 +81,7 @@
 | event | data 字段 | 何时发 | 前端建议 |
 |---|---|---|---|
 | `meta` | `trace_id, prompt_version, policy_version, model` | 首帧 | 立即显示"正在分析…" |
-| `scope` | `scope, allowed, reason` | 范围判定后 | `allowed=false` 时后续只剩 `delta`+`done` |
+| `scope` | `scope, allowed, reason` | 范围判定后 | `allowed=false` 时后续只剩 `delta`+`done`。**多轮**：追问先做指代消解，再对原问题与消解结果**各判一次**；追问自身无范围线索时沿用历史中被拒的范围 |
 | `route` | `route`（`chat`/`knowledge`/`data`） | 路由后 | 可忽略 |
 | `sql` | `sql, tables` | 数据分支生成后 | **仅 ADMIN 下发**；USER 只收 `has_sql:true` |
 | `table` | `columns, rows, row_count, truncated, masked_columns` | 执行成功 | 表格卡片 |
@@ -82,7 +89,7 @@
 | `delta` | `text` | 生成答案时 | 打字机增量拼接 |
 | `citations` | `[{title, snippet}]` | 知识分支 | 折叠展示，可核查 |
 | `guard` | `action, note` | 触发护栏时 | 提示条：`masked`/`limit_added`/`truncated`/`denied` |
-| `done` | `elapsed_ms, tokens, cost_yuan, cache_hit, repaired, attempts` | 收尾 | 只展示 elapsed_ms |
+| `done` | `elapsed_ms, tokens, cost_yuan, cache_hit, repaired, attempts, clarify?` | 收尾 | 只展示 elapsed_ms。`clarify=true` 表示指代不明、已向用户追问（事件序：scope → delta(追问话术) → done） |
 | `error` | `code, message, retryable` | 失败 | 见 §2.4 |
 
 示例（一次完整的用户版问答）：

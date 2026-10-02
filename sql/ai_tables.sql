@@ -16,13 +16,20 @@
 -- ============================================================================
 
 -- 1) 会话：小程序左侧列表用
+-- ⚠️ external_id 的由来（设计决策，2026-10-01）：L1/L2 契约里 session_id 是**字符串**
+--    （小程序侧的会话 ID），而本表主键是 BIGINT。二者不能混用，所以：
+--    · 边车持有会话（`ai_chat_session`/`ai_chat_message`），并用 external_id 承接那个字符串；
+--    · 表内关联一律用 BIGINT 主键（ai_chat_message.session_id、ai_query_audit.session_id）。
+--    备选方案（Java 持有会话、L2 请求里带 history）需要改已冻结的契约，故未采用。
 CREATE TABLE IF NOT EXISTS ai_chat_session (
-  id          BIGINT       NOT NULL AUTO_INCREMENT,
-  user_id     BIGINT       NOT NULL,
-  title       VARCHAR(64)  NOT NULL DEFAULT '',
-  created_at  DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  updated_at  DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  id           BIGINT       NOT NULL AUTO_INCREMENT,
+  external_id  VARCHAR(64)  NULL COMMENT 'L1/L2 契约里的字符串 session_id（外部标识）',
+  user_id      BIGINT       NOT NULL,
+  title        VARCHAR(64)  NOT NULL DEFAULT '',
+  created_at   DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at   DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
   PRIMARY KEY (id),
+  UNIQUE KEY uk_external (external_id),
   KEY idx_user_updated (user_id, updated_at)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='AI 会话（面向用户可见的聊天列表）';
 

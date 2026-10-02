@@ -54,6 +54,7 @@ class Deps:
     classify_llm: Callable[[str], str] | None = None    # 路由分类兜底
     rag_llm: LlmFn | None = None                        # 知识分支作答
     summary_llm: TextFn | None = None                   # 结果转述（纯文本）
+    rewrite_llm: LlmFn | None = None                    # 多轮指代消解（只在有历史时调用）
 
 
 def _usage_delta(before: dict[str, Any]) -> dict[str, Any]:
@@ -92,20 +93,46 @@ def error_event(message: str | None) -> Event:
     return "error", {"code": "INTERNAL", "message": raw or "未知错误", "retryable": True}
 
 
-def _audit_payload(trace: str, principal: Principal, question: str, session_id: str | None,
+def _rewrite_question(question: str, history: str, deps: "Deps") -> tuple[str, str | None]:
+    """多轮指代消解：把"那他呢/再按周拆"补全成可独立执行的问题。
+
+    返回 (要执行的问题, 需要追问时的话术)。任何失败都**退回原问题** ——
+    多轮是增强能力，不该因为一次改写失败就答不出话。
+    """
+    if not (history or "").strip() or deps.rewrite_llm is None:
+        return question, None
+    try:
+        raw = deps.rewrite_llm(prompts_user.query_rewrite_messages(question, history=history))
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("[pipeline] 指代消解失败，改用原问题：{}: {}", type(exc).__name__,
+                       str(exc)[:120])
+        return question, None
+    if not isinstance(raw, dict):
+        return question, None
+    if raw.get("need_clarify"):
+        return question, str(raw.get("clarify_question") or "").strip() or None
+    standalone = str(raw.get("standalone_question") or "").strip()
+    if not standalone or standalone == question:
+        return question, None
+    logger.info("[pipeline] 指代消解：{!r} → {!r}", question[:40], standalone[:60])
+    return standalone, None
+
+
+def _audit_payload(trace: str, principal: Principal, question: str, session_ref: int | None,
                    usage_before: dict[str, Any], *, scope: str | None, verdict: str,
                    route: str | None = None, deny_reason: str | None = None,
                    result: "nl2sql.Nl2SqlResult | None" = None) -> dict[str, Any]:
     """构造审计行（契约 §4）。**只在服务端流转**，见 answer_stream 的 audit_sink。
 
-    注意 session_id：L2 契约里是字符串（如 "s_1"），而 `ai_query_audit.session_id` 是 BIGINT
-    （指向 ai_chat_session.id）—— 会话落库（P3）之前这里一律 None，绝不硬塞字符串进 BIGINT。
+    session_ref 是**会话主键（BIGINT）**，来自 `agent/session.py` 的解析结果；
+    L2 契约里的字符串 session_id 存在 `ai_chat_session.external_id`，**绝不**混用
+    （字符串塞进 BIGINT 列会被 MySQL 拒绝/截断）。
     """
     after = llm_mod.usage().summary()
     payload: dict[str, Any] = {
         "trace_id": trace,
         "user_id": principal.user_id,
-        "session_id": None,
+        "session_id": session_ref,
         "question": question,
         "route": route,
         "scope": scope,
@@ -154,6 +181,7 @@ def answer_stream(question: str, principal: Principal, *,
                   history: str = "",
                   deps: Deps | None = None,
                   audit_sink: Callable[[dict[str, Any]], Any] | None = None,
+                  session_ref: int | None = None,
                   execute: bool = True,
                   top_k: int | None = None,
                   use_cache: bool = True) -> Iterator[Event]:
@@ -169,6 +197,7 @@ def answer_stream(question: str, principal: Principal, *,
     with llm_mod.isolated_usage():
         for event, data in _answer_stream(question, principal, session_id=session_id,
                                           trace_id=trace_id, history=history, deps=deps,
+                                          session_ref=session_ref,
                                           execute=execute, top_k=top_k, use_cache=use_cache):
             if event == "_audit":
                 if audit_sink is not None:
@@ -183,6 +212,7 @@ def answer_stream(question: str, principal: Principal, *,
 
 def _answer_stream(question: str, principal: Principal, *,
                    session_id: str | None = None,
+                   session_ref: int | None = None,
                    trace_id: str | None = None,
                    history: str = "",
                    deps: Deps | None = None,
@@ -199,14 +229,38 @@ def _answer_stream(question: str, principal: Principal, *,
                    "prompt_version": prompts_user.PROMPT_VERSION,
                    "policy_version": policy.POLICY_VERSION, "model": LLM.model}
 
+    # 0) 多轮指代消解（仅当有历史）：先补全成可独立执行的问题
+    effective, clarify = _rewrite_question(question, history, deps)
+
     # 1) 语义层范围判定：必须在生成之前 —— 拒答题目不消耗模型调用（契约 §2.3 scope）
-    decision = scope_mod.judge(question, principal, history=history, llm_fn=deps.scope_llm)
+    #    ★ 对**原问题**和**消解后的问题**都判，任一拒绝即拒绝：设计文档 §10 明确要求
+    #      "指代消解后必须重跑范围判定，不沿用上一轮结论"，否则"那上个月呢"这类追问
+    #      会把上一轮被拒的范围绕过去。
+    decisions = [scope_mod.judge(question, principal, history=history, llm_fn=deps.scope_llm)]
+    if effective != question:
+        decisions.append(scope_mod.judge(effective, principal, history=history,
+                                         llm_fn=deps.scope_llm))
+    decision = next((d for d in decisions if not d.allowed), decisions[0])
+
+    # 省略式追问的**确定性兜底**（真实冒烟发现的漏洞）：
+    # "那上个月呢"这类问题本身不带任何范围线索，而改写模型可能把范围收窄（实测就把
+    # "平台…"改成了只问自己）。此时若历史里出现过被拒的范围，就按同样原因拒答 ——
+    # 不依赖模型是否听话。
+    own_markers = scope_mod.judge_by_rules(question, principal)   # 用户自己那句话里的范围线索
+    if (history and decision.allowed and own_markers is None
+            and decision.scope == scope_mod.SELF and decision.source == "default"):
+        hist = scope_mod.judge_by_rules(history, principal)
+        if hist is not None and not hist.allowed:
+            decision = scope_mod.ScopeDecision(hist.scope, False,
+                                               "追问未带范围线索，沿用历史中的范围：%s" % hist.reason,
+                                               "rule-history", hist.deny_reason)
+
     yield "scope", {"scope": decision.scope, "allowed": decision.allowed,
                     "reason": decision.reason, "source": decision.source}
     if not decision.allowed:
         yield "delta", {"text": prompts_user.deny_text(decision.deny_reason)}
         logger.info("[pipeline] 拒答 {}（{}）trace={}", decision.deny_reason, decision.source, trace)
-        yield "_audit", _audit_payload(trace, principal, question, session_id, before,
+        yield "_audit", _audit_payload(trace, principal, question, session_ref, before,
                                        scope=decision.scope, verdict="denied",
                                        deny_reason=decision.deny_reason, route=None)
         yield "done", _done(started, before, route=None, denied=True,
@@ -214,9 +268,18 @@ def _answer_stream(question: str, principal: Principal, *,
                             cache_hit=False, repaired=False, attempts=0)
         return
 
+    # 1.5) 指代不明：向用户追问（不是拒答）。放在范围判定之后，事件序里始终有 scope。
+    if clarify:
+        yield "delta", {"text": clarify}
+        yield "_audit", _audit_payload(trace, principal, question, session_ref, before,
+                                       scope=decision.scope, verdict="clarify", route=None)
+        yield "done", _done(started, before, route=None, denied=False, clarify=True,
+                            cache_hit=False, repaired=False, attempts=0)
+        return
+
     # 2) 路由（chat / knowledge / data）
     # 普通用户关闭"直接输入 SQL"入口（设计文档 §5.3）；运营及以上保留
-    route = router.route(question, classify_fn=deps.classify_llm or router.llm_classify,
+    route = router.route(effective, classify_fn=deps.classify_llm or router.llm_classify,
                          allow_raw_sql=principal.is_privileged)
     yield "route", {"route": route}
 
@@ -239,7 +302,7 @@ def _answer_stream(question: str, principal: Principal, *,
                                 for c in r.citations]
         if r.error:
             yield error_event(r.error)
-        yield "_audit", _audit_payload(trace, principal, question, session_id, before,
+        yield "_audit", _audit_payload(trace, principal, question, session_ref, before,
                                        scope=decision.scope, route=route,
                                        verdict="failed" if r.error else "ok")
         yield "done", _done(started, before, route=route, insufficient=r.insufficient,
@@ -247,7 +310,7 @@ def _answer_stream(question: str, principal: Principal, *,
         return
 
     # 3) 数据分支：编排层已经判过范围，这里不再重复调用兜底模型（避免判两次）
-    r = nl2sql.answer(question, principal=principal, llm_fn=deps.nl2sql_llm,
+    r = nl2sql.answer(effective, principal=principal, llm_fn=deps.nl2sql_llm,
                       scope_llm_fn=None, history=history,
                       execute=execute, top_k=top_k, use_cache=use_cache)
 
@@ -255,7 +318,7 @@ def _answer_stream(question: str, principal: Principal, *,
         # 拒答是正常业务结果（语义层 / 策略层 / 模型主动拒答），不是错误
         yield "delta", {"text": r.deny_message()}
         yield "guard", {"action": "denied", "note": r.deny_reason or "denied"}
-        yield "_audit", _audit_payload(trace, principal, question, session_id, before,
+        yield "_audit", _audit_payload(trace, principal, question, session_ref, before,
                                        scope=r.scope, route=route, verdict="denied",
                                        deny_reason=r.deny_reason, result=r)
         yield "done", _done(started, before, route=route, denied=True, scope=r.scope,
@@ -295,7 +358,7 @@ def _answer_stream(question: str, principal: Principal, *,
     if r.stage == "failed":
         yield error_event(r.error)
 
-    yield "_audit", _audit_payload(trace, principal, question, session_id, before,
+    yield "_audit", _audit_payload(trace, principal, question, session_ref, before,
                                    scope=r.scope, route=route,
                                    verdict="failed" if r.stage == "failed" else "ok", result=r)
     yield "done", _done(started, before, route=route, denied=False, scope=r.scope,

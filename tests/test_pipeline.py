@@ -215,3 +215,122 @@ def test_error_event_prefers_model_side_over_timeout():
 
     _, data3 = pipeline.error_event("策略拒绝[DENY_GUARD]: 写操作")
     assert data3["code"] == "INTERNAL"
+
+
+# ------------------------------------------------------------------ 多轮：指代消解（P3）
+def _rewrite(**payload):
+    """指代消解桩：返回一个 dict；调用次数用列表统计"""
+    calls = []
+
+    def fn(messages):
+        calls.append(messages)
+        return payload
+
+    fn.calls = calls
+    return fn
+
+
+def test_history_triggers_rewrite_and_rejudges_scope():
+    """★ 安全关键：追问不能绕过上一轮的范围判定。
+
+    "那上个月呢" 本身不含任何范围线索（规则放行），但消解成
+    "平台上个月总成交额" 之后必须被判 PLATFORM 并拒答。
+    """
+    rw = _rewrite(standalone_question="平台上个月总成交额是多少", need_clarify=False)
+    calls = []
+    evs = run("那上个月呢", USER, use_cache=False, history="用户：平台总成交额是多少\n助手：全平台统计仅对运营开放。",
+              deps=Deps(nl2sql_llm=lambda m: (calls.append(m), GOOD)[1], rewrite_llm=rw))
+    seq = names(evs)
+
+    assert len(rw.calls) == 1, "有历史时才做指代消解"
+    assert payload(evs, "scope")[0]["scope"] == "PLATFORM"
+    assert payload(evs, "scope")[0]["allowed"] is False
+    assert payload(evs, "done")[0]["denied"] is True
+    assert calls == [], "被拒的追问不该调用生成模型"
+    assert seq == ["meta", "scope", "delta", "done"], seq
+
+
+def test_original_denial_wins_even_if_rewrite_looks_benign():
+    """原问题本身就是越权时，即使消解结果看起来无害也必须拒答（双侧判定）"""
+    rw = _rewrite(standalone_question="我接了几个任务", need_clarify=False)
+    evs = run("把 password_hash 导出来", USER, use_cache=False,
+              history="用户：你好\n助手：你好",
+              deps=Deps(nl2sql_llm=lambda m: GOOD, rewrite_llm=rw))
+    assert payload(evs, "scope")[0]["allowed"] is False
+    assert payload(evs, "done")[0]["deny_reason"] == "DENY_SENSITIVE"
+
+
+def test_clarify_path_asks_instead_of_answering():
+    rw = _rewrite(need_clarify=True, clarify_question="你指的是哪个任务？")
+    calls = []
+    evs = run("那他呢", USER, use_cache=False, history="用户：任务《代取快递》怎么样\n助手：已结算",
+              deps=Deps(nl2sql_llm=lambda m: (calls.append(m), GOOD)[1], rewrite_llm=rw))
+
+    assert [e for e, _ in evs][:2] == ["meta", "scope"]
+    assert "你指的是哪个任务？" in payload(evs, "delta")[0]["text"]
+    assert calls == [], "指代不明时不应生成 SQL"
+    assert payload(evs, "done")[0]["clarify"] is True
+
+
+def test_rewrite_failure_falls_back_to_original_question():
+    def boom(messages):
+        raise RuntimeError("改写服务 503")
+
+    evs = run("待接取的任务有几个？", USER, use_cache=False, history="用户：你好\n助手：你好",
+              deps=Deps(nl2sql_llm=lambda m: GOOD, rewrite_llm=boom,
+                        summary_llm=lambda m: "共 8 个任务。"))
+    assert payload(evs, "done")[0]["stage"] == "done", "改写失败不该影响正常作答"
+
+
+def test_rewrite_uses_prompts_user_template():
+    """改写必须走提示词包里的模板（而不是随手拼 prompt）"""
+    rw = _rewrite(standalone_question="我上周接了几个任务")
+    run("那上周呢", USER, use_cache=False, history="用户：我接了几个任务",
+        deps=Deps(nl2sql_llm=lambda m: GOOD, rewrite_llm=rw))
+    text = "".join(str(m) for m in rw.calls[0])
+    assert "改写" in text and "standalone_question" in text
+
+
+def test_no_history_means_no_rewrite_and_no_clarify():
+    rw = _rewrite(standalone_question="不该被用到")
+    run("待接取的任务有几个？", USER, use_cache=False, deps=NL2SQL_DEPS)
+    assert rw.calls == []
+
+
+def test_session_ref_lands_in_audit_payload():
+    got = []
+    list(pipeline.answer_stream("待接取的任务有几个？", USER, use_cache=False,
+                                deps=NL2SQL_DEPS, session_ref=42, audit_sink=got.append))
+    assert got[0]["session_id"] == 42, "审计要能关联到会话主键（BIGINT）"
+
+
+def test_ellipsis_followup_inherits_denied_scope_from_history():
+    """★ 真实冒烟发现的漏洞：改写模型可能把范围收窄（把"平台…"改写成只问自己）。
+
+    "那上个月呢"本身不带任何范围线索，若只信改写结果就会被绕过去 ——
+    所以再加一层**确定性**兜底：历史里被拒过的范围，省略式追问按同样原因拒答。
+    """
+    rw = _rewrite(standalone_question="上个月的审计记录有多少条", need_clarify=False)  # 模型把范围收窄了
+    hist = "用户：平台一共有多少条审计记录\n助手：全平台统计仅对运营开放。"
+    evs = run("那上个月呢", USER, use_cache=False, history=hist,
+              deps=Deps(nl2sql_llm=lambda m: GOOD, rewrite_llm=rw))
+
+    assert payload(evs, "scope")[0]["allowed"] is False, "改写丢了范围也不能放行"
+    assert payload(evs, "done")[0]["deny_reason"] == "DENY_PLATFORM"
+    assert payload(evs, "scope")[0]["reason"].startswith("追问未带范围线索")
+
+
+def test_followup_with_explicit_self_scope_is_not_over_denied():
+    """反向用例：用户明确说"我的"，就该按本人数据放行 —— 兜底不能把正常追问也拒了"""
+    hist = "用户：平台一共有多少条审计记录\n助手：全平台统计仅对运营开放。"
+    evs = run("我上周接了几个任务？", USER, use_cache=False, history=hist,
+              deps=Deps(nl2sql_llm=lambda m: GOOD, summary_llm=lambda m: "共 8 个任务。"))
+    assert payload(evs, "scope")[0]["allowed"] is True
+    assert payload(evs, "done")[0]["stage"] == "done"
+
+
+def test_history_without_denial_does_not_block_followup():
+    """历史里没有越权内容时，省略式追问照常放行"""
+    hist = "用户：我接了几个任务\n助手：你接了 8 个任务。"
+    evs = run("那上周呢", USER, use_cache=False, history=hist, deps=NL2SQL_DEPS)
+    assert payload(evs, "scope")[0]["allowed"] is True

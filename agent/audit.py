@@ -35,6 +35,7 @@ COLUMNS = ("trace_id", "user_id", "session_id", "question", "route", "scope",
 VERDICT_OK = "ok"            # 正常作答
 VERDICT_DENIED = "denied"    # 语义/策略层拒答
 VERDICT_FAILED = "failed"    # 生成或执行失败
+VERDICT_CLARIFY = "clarify"  # 多轮指代不明，向用户追问（不是拒答）
 
 
 def _env(key: str, default: str = "") -> str:
@@ -98,17 +99,10 @@ def stats() -> dict[str, int]:
 
 
 def _connect():
-    import pymysql
+    """审计写连接（`AUDIT_DB_*` → `DB_*`）；统一走 agent/dbwrite.py"""
+    from agent import dbwrite
 
-    from config import DB
-
-    user = _env("AUDIT_DB_USER") or DB.user
-    password = _env("AUDIT_DB_PASSWORD") or DB.password
-    database = _env("AUDIT_DB_NAME") or DB.name
-    host = _env("AUDIT_DB_HOST") or DB.host
-    port = int(_env("AUDIT_DB_PORT") or DB.port)
-    return pymysql.connect(host=host, port=port, user=user, password=password,
-                           database=database, connect_timeout=5, autocommit=True)
+    return dbwrite.connect("AUDIT")
 
 
 def record(row: AuditRow | dict[str, Any]) -> bool:
