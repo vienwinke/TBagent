@@ -17,9 +17,9 @@
 
 | 技术点 | 做法 | 可量化的效果 |
 |---|---|---|---|
-| **Schema 太大 → 幻觉** | 表/列中文描述向量化，只注入 Top-K 相关表 | token −60%，EX +9pt |
+| **Schema 太大 → 幻觉** | 表/列中文描述向量化，只注入 Top-K 相关表 | Schema 召回 **90.2%**（46/51）；消融：去掉 Schema 检索 EX −3.9pt |
 | **SQL 不能直接用** | ★ **三层护栏**：`sqlglot` 静态校验 → 只读沙箱 → `EXPLAIN` 扫描行数阈值（③ 需 MySQL 的 rows 估算；sqlite 演示快照下会显式标记"未测量"而非谎报 0 行） | 危险语句拦截 10/10 |
-| **首次生成常失败** | ★ **结果回环自修复**：错误信息 + Schema 回灌，自动重试 1 次 | 首次成功率 71% → 89% |
+| **首次生成常失败** | ★ **结果回环自修复**：错误信息 + Schema 回灌，自动重试 1 次 | 首次修复成功率 **75%**（3/4，⚠️ 样本仅 4 题）；消融：关掉回环 EX −5.9pt |
 | **没有评估就是自嗨** | ★ **60 条评估集**（含 10 条陷阱题）+ 6 指标 + **消融实验** | 每个模块的增益都有数字 |
 | **成本与延迟** | 问题→SQL 缓存、模型档位可切、token/费用面板 | 单次均值 ≤ ¥0.01 ✓（多行转述题仍超标）；P95 ≤ 3s ✗ 不可达 |
 
@@ -32,14 +32,14 @@
   │            ├ 查知识 → RAG：业务文档 → BGE-small-zh + FAISS ⇄ BM25 → 融合重排 → 带引用回答
   │            └ 查数据 → NL2SQL（核心）
   │                        (a) Schema 检索：只注入 Top-K 相关表
-  │                        (b) SQL 生成（few-shot + 只读硬约束）
+  │                        (b) SQL 生成（Schema 注入 + 只读硬约束；few-shot 未实现）
   │                        (c) ★ 三层护栏
   │                              ① sqlglot：仅 SELECT/WITH、表白名单、禁多语句、强制 LIMIT
   │                              ② 只读沙箱：独立只读账号 + SET SESSION TRANSACTION READ ONLY + max_execution_time
   │                              ③ EXPLAIN 成本预估：扫描行数超阈值直接拒绝
   │                        (d) ★ 结果回环校验：0 行 / 报错 → 回灌重试 1 次
   │                        (e) 自动选图（时间序列→折线 / 分类→柱状 / 占比→饼图）
-  │                        (f) 脱敏（openid / password_hash / token 列永不出现在结果里）
+  │                        (f) 脱敏（openid / unionid / password_hash / ip 列永不出现在结果里）
   └─ 输出：答案 + SQL（可折叠）+ 结果表 + 图 + 引用 + 耗时/成本
 ```
 
@@ -75,7 +75,7 @@ agent/        router 意图路由 · schema_index Schema 检索 · sql_guard 静
               nl2sql 生成+回环 · chart 选图 · rag/kb 知识库 · answer 转述 · cache 缓存
               policy 行级隔离重写（已接线：SQL 唯一出口）· scope 语义层范围判定（已接线：拒答在生成之前）
               pipeline 编排层（事件流；Streamlit 与将来的 FastAPI 共用同一条链路）
-              prompts_user 嵌入版提示词包（已接线）
+              prompts_user 嵌入版提示词包（**部分接线**：nl2sql/scope/deny 已用；summarize/rag/suggest/chart 未被生产路径引用）
 sidecar/      ★ AI 边车（FastAPI + SSE）：/v1/ai/chat 事件流 · /healthz · /readyz · /metrics
               鉴权：HS256 内部 JWT（算法锁定）；**未配密钥时 fail-closed 503**
 eval/         cases.yaml 60 条用例 · kb_cases.yaml 知识库用例 · run_eval.py 跑分（--ablation 消融 / --kb 知识库）
@@ -96,7 +96,7 @@ data/         schema.json · schema_index.json · snapshot.sqlite · knowledge/ 
 | 首次修复成功率 | ≥ 60% | **75%**（3/4） | 首次失败后回环救回。⚠️ **样本仅 4 题**，置信度有限 |
 | 危险操作执行率 | 0% | **0%**（7/7 安全） | 陷阱题中最终有危险语句被执行的比例 |
 | 脱敏命中率 | 100% | **100%** | 敏感列被正确脱敏 |
-| P50 / P95 延迟 | P95 ≤ 3s ⚠️ 未达标 | P50 3.4s / P95 10.3s | 端到端。**单次 LLM 生成本身 ≈4s，未流式化前 3s 物理上不可达**，见 [docs/评估报告.md](docs/评估报告.md) §6.8 |
+| P50 / P95 延迟 | P95 ≤ 3s ⚠️ 未达标 | P50 **3.7s** / P95 **11.7s**（取自 `eval/out/scorecard.md` 的 2026-10-01 跑分，与其余指标同源） | 端到端。**单次 LLM 生成本身 ≈4s，未流式化前 3s 物理上不可达**，见 [docs/评估报告.md](docs/评估报告.md) §6.8 |
 | 单次成本 | ≤ ¥0.01 | 保守上界 ¥0.0086（多行转述题 ¥0.0115） | 实测输入 token **75~99% 命中 provider 前缀缓存**；未配置缓存单价时按全价计，故为保守值 |
 
 > EX 判定用**本次运行实时执行参考 SQL** 得到的基准（时间类问题口径相对"现在"，存档基准会过期，
@@ -136,5 +136,5 @@ data/         schema.json · schema_index.json · snapshot.sqlite · knowledge/ 
 | P4 角色化运营版 · P5 上线加固 | ⬜ |
 
 > 验收门禁（CI 五道，全部退出码阻断）：`ruff check` → 密钥扫描 → 越权红线 54 条 →
-> 回归 372 条（sqlite 快照）→ **MySQL 类型/DDL 子集**（另起空库 + 最小 fixture，
+> 回归 400 条（sqlite 快照，`pytest --collect-only` 实测）→ **MySQL 类型/DDL 子集**（另起空库 + 最小 fixture，
 > 跑那些 sqlite 下会被跳过的用例 —— 金额 `Decimal` 与时间类型的缺陷只有真 MySQL 才抓得到）。
