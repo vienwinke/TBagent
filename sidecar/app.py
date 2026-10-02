@@ -9,8 +9,12 @@
     GET  /readyz       依赖就绪（LLM 配置 / 数据库只读 / 策略版本 / 鉴权是否配置）
     GET  /metrics      Prometheus 文本（自有的请求计数，不依赖进程级用量单例）
 
-未实现（P1 / P2，契约里已排期）
-    JWT 校验、会话与审计落库（ai_* 四表）、Redis 限流/幂等、配额
+后续（P4 / P5，契约里已排期）
+    角色化运营版（ADMIN/OPERATOR 视图与专属提示词）、上线加固
+
+（P1 / P2 曾列在这里的 JWT 校验、会话与审计落库、Redis 限流/幂等、配额
+  **均已实现**：见 sidecar/auth.py、agent/session.py、agent/audit.py、
+  sidecar/limiter.py 与 sidecar/denylist.py；本段此前是过期描述。）
 
 ⚠️ 身份为什么**默认拒绝服务**（fail-closed）
     契约 §2.2 要求"只信内部 JWT，绝不接受客户端自带的 user_id"。

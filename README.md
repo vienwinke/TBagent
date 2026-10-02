@@ -32,7 +32,7 @@
   │            ├ 查知识 → RAG：业务文档 → BGE-small-zh + FAISS ⇄ BM25 → 融合重排 → 带引用回答
   │            └ 查数据 → NL2SQL（核心）
   │                        (a) Schema 检索：只注入 Top-K 相关表
-  │                        (b) SQL 生成（Schema 注入 + 只读硬约束；few-shot 未实现）
+  │                        (b) SQL 生成（Schema 注入 + 只读硬约束 + few-shot，后者默认关闭）
   │                        (c) ★ 三层护栏
   │                              ① sqlglot：仅 SELECT/WITH、表白名单、禁多语句、强制 LIMIT
   │                              ② 只读沙箱：独立只读账号 + SET SESSION TRANSACTION READ ONLY + max_execution_time

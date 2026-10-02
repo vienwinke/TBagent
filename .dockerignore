@@ -1,0 +1,18 @@
+# 镜像里不需要的东西
+.venv/
+.venv*/
+__pycache__/
+*.pyc
+.ruff_cache/
+.pytest_cache/
+.git/
+.deepseek-harness/
+
+# 密钥绝不进镜像（运行时用 -e/--env-file 注入）
+.env
+.env.*
+
+# 评测产物与本地缓存（体积大且与运行无关）
+eval/out/
+data/cache/
+docs/*.visual-check.*
