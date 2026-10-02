@@ -202,3 +202,39 @@ def test_executor_accepts_rewritten_sql():
                         Principal(user_id=1, role=ROLE_ADMIN))
     qr = ex.execute_readonly(rw, check_cost=False)
     assert qr.row_count == 1
+
+
+# ---------------------------------------------------------------- 防双入口分裂
+def test_ui_and_sidecar_do_not_call_answer_directly():
+    """源码守卫：UI 与边车不得绕过 pipeline 直接调 `nl2sql.answer` / `rag.answer`。
+
+    为什么需要它：`agent/pipeline.py` 的整个价值就是"Streamlit 与 FastAPI 共用同一条
+    链路"（事件流的顺序、护栏提示、拒答话术都只有一份）。作者在接口契约里写过
+    "此前踩过同一逻辑两份实现的坑" —— 但那是靠自觉，**没有任何机制拦着下一个人
+    在 app.py 里再写一遍**。这个测试就是那个机制。
+
+    注意：`import nl2sql` 本身是**允许**的 —— app.py 合法地使用了
+    `nl2sql.local_principal()` / `nl2sql.default_scope_llm()` 这类 helper 来构造
+    pipeline 的依赖。禁止的只有直接调用编排入口 `answer()`。
+
+    用 AST 而不是文本匹配：注释与文档里会提到这些名字，文本匹配会误伤
+    （本仓库在 cost_guard 的守卫上已经踩过一次）。
+    """
+    import ast
+
+    root = Path(__file__).resolve().parents[1]
+    offenders = []
+    for rel in ("app.py", "sidecar/app.py"):
+        tree = ast.parse((root / rel).read_text(encoding="utf-8"))
+        for node in ast.walk(tree):
+            if (
+                isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Attribute)
+                and node.func.attr == "answer"
+                and isinstance(node.func.value, ast.Name)
+                and node.func.value.id in ("nl2sql", "rag")
+            ):
+                offenders.append("%s:%d" % (rel, node.lineno))
+    assert not offenders, (
+        "以下位置绕过 pipeline 直接调用编排入口：%s —— 请改走 pipeline.answer_stream()，"
+        "否则 UI 与服务层会再次分裂成两份实现" % offenders)
