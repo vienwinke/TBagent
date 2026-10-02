@@ -30,7 +30,7 @@ import time
 from typing import Any, Iterator
 
 from fastapi import FastAPI, Request
-from fastapi.responses import JSONResponse, StreamingResponse
+from fastapi.responses import JSONResponse, Response, StreamingResponse
 from loguru import logger
 from pydantic import BaseModel, Field
 
@@ -38,7 +38,7 @@ import llm as llm_mod
 from config import LLM
 from agent import audit as audit_mod
 from agent import session as session_mod
-from agent import pipeline, policy
+from agent import pipeline, policy, router
 from sidecar import auth
 from sidecar.denylist import make_denylist
 from sidecar.limiter import make_limiter
@@ -164,16 +164,53 @@ def _deps_for(budget_s: float) -> Deps | None:
     #   有了 deadline，每次尝试的超时被剩余时间夹住，且预算耗尽后不再重试。
     deadline = time.time() + budget_s
     return Deps(
-        nl2sql_llm=lambda messages: llm_mod.chat_json(messages, tag="nl2sql", timeout=remaining,
+        # 单次生成本身也设上限（8s）：否则一次"回环修复"能把剩余 15s 全吃掉，
+        # 用户等 20s 才拿到结果 —— 实测就是这么发生的。生成通常 3~6s，8s 足够。
+        nl2sql_llm=lambda messages: llm_mod.chat_json(messages, tag="nl2sql",
+                                                      timeout=min(remaining, 8.0),
                                                       deadline=deadline),
         summary_llm=lambda messages: llm_mod.chat(messages, temperature=0, max_tokens=256,
                                                   tag="summary", model=LLM.model_cheap,
                                                   timeout=remaining, deadline=deadline),
         # 多轮指代消解也是"便宜档"的活：输入是短对话，输出一个 JSON
-        rewrite_llm=lambda messages: llm_mod.chat_json(messages, tag="rewrite",
-                                                       model=LLM.model_cheap,
-                                                       timeout=remaining, deadline=deadline),
+        # 改写同样是辅助小活：给它独立的 5s 子预算（含重试），失败就退回原问题
+        rewrite_llm=lambda messages: llm_mod.chat_json(
+            messages, tag="rewrite", model=LLM.model_cheap, timeout=4.0,
+            deadline=min(deadline, time.time() + 5.0)),
+        # 路由判定同样是模型调用，必须也受预算约束（实测它在总耗时里白吃 3.5s）。
+        # ⚠️ 契约是 **question → 路由字符串**（与 router.llm_classify 同构），
+        #    不是 messages → dict：传 chat_json 会让 route() 拿到 dict、判定失败并静默退回
+        #    知识库分支（实测把"我现在可以接取哪些任务"答成了资料检索）。
+        classify_llm=lambda question: _classify_within_budget(question, remaining, deadline),
     )
+
+
+def _classify_within_budget(question: str, remaining: float, deadline: float) -> str:
+    """路由分类（便宜档 + 预算上限）：question → DATA / KNOWLEDGE / CHAT。
+
+    与 `router.llm_classify` 同构，但把单次上限压到 2.5s 并受 deadline 约束 ——
+    路由只是"三选一"的小活，没理由吃掉端到端预算的一大块（实测 3.5s）。
+    失败时不抛：退回 DATA（与 router.llm_classify 的兜底一致），让数据链路去尝试。
+    """
+
+    # ★ 给分类器一个**独立的子预算（含重试）**：只设单次 timeout 挡不住重试 ——
+    #   实测 3 次超时 + 退避（1.4+2.5+4.3s）就吃掉了 17s，把主生成阶段的预算耗光。
+    #   路由只是"三选一"的小活，失败就该立刻退回规则默认值。
+    import time as _time
+    sub_deadline = min(deadline, _time.time() + 3.0)
+    try:
+        text = llm_mod.chat([{"role": "system", "content": router.ROUTE_SYSTEM},
+                             {"role": "user", "content": question}],
+                            temperature=0, max_tokens=8, tag="route",
+                            model=LLM.model_cheap, timeout=2.5,
+                            deadline=sub_deadline).strip().lower()
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("[sidecar] 路由分类失败（{}），退回 data 由规则兜底", type(exc).__name__)
+        return router.DATA
+    for key in (router.DATA, router.KNOWLEDGE, router.CHAT):
+        if key in text:
+            return key
+    return router.DATA
 
 
 def _stream(req: ChatRequest, principal: Principal, trace_id: str | None, idem_key: str,
@@ -181,6 +218,10 @@ def _stream(req: ChatRequest, principal: Principal, trace_id: str | None, idem_k
     """把 pipeline 的事件流转成 SSE 帧；同时负责：预算、串行、幂等、记账、释放并发坑位。"""
     budget_s = max(0.5, _env_int("SIDECAR_TIMEOUT_MS", 8000) / 1000.0)
     deadline = time.monotonic() + budget_s
+    # 收尾宽限：模型调用在 budget_s 处已停止（见 _deps_for 的 deadline），
+    # 但 pipeline 可能正好在这一刻拿到结果（实测差 1ms —— 用户看到超时，而答案已就绪）。
+    # 宽限 1.5s 仍小于上游读超时的余量（timeout-ms + 2000ms），所以不会把上游拖爆。
+    hard_deadline = deadline + 1.5
     chunks: list[str] = []
     denied = error = False
     tokens, cost = 0, 0.0
@@ -245,14 +286,17 @@ def _stream(req: ChatRequest, principal: Principal, trace_id: str | None, idem_k
                 pending_done = data
                 break
             yield emit(event, data)
-            if event == "error":
-                break
-            if time.monotonic() > deadline:
+            # ⚠️ 不能因为 error 就 break：pipeline 在错误路径上**仍会**发 `_audit` 与 `done`
+            #    （契约要求 done 收尾）。原先 break 会把 done 吞掉，客户端只能等连接关闭。
+            #    真正的"卡死"由下面的 deadline 兜底。
+            if time.monotonic() > hard_deadline:
                 # 预算耗尽：给诚实降级（不是 500，也不假装成功）
                 error = True
+                # 给用户的还是人话（技术细节在日志里）：内部的"预算耗尽/第 N 次失败"措辞
+                # 直接甩到界面上，用户只会一脸问号（实测）。
+                logger.warning("[sidecar] 端到端预算 {}ms 耗尽，向用户降级", int(budget_s * 1000))
                 yield emit("error", {"code": "LLM_UNAVAILABLE",
-                                     "message": "端到端预算 %dms 已耗尽（模型侧超时）"
-                                                % int(budget_s * 1000),
+                                     "message": "模型响应超时了，请再试一次",
                                      "retryable": True})
                 # 超时也要**如实报账**：模型已经在烧 token 了，报 0 会让成本统计偏小。
                 # request_usage 是服务层直接持有的对象（不依赖 ContextVar 可见性）。
@@ -459,7 +503,10 @@ def delete_session(session_id: int, request: Request) -> Any:
         return JSONResponse(status_code=404,
                             content={"code": "NOT_FOUND", "message": "会话不存在",
                                      "retryable": False})
-    return JSONResponse(status_code=204, content=None)
+    # 204 必须【无 body】：JSONResponse 会写出 null 四个字节，真实 uvicorn 直接抛
+    # RuntimeError: Response content longer than Content-Length
+    # （TestClient 容忍它，所以单测发现不了 —— 这条是真实服务器日志抓到的）
+    return Response(status_code=204)
 
 
 @app.post("/v1/ai/feedback")
@@ -477,7 +524,10 @@ def feedback(req: FeedbackRequest, request: Request) -> Any:
     status = session_mod.save_feedback(req.message_id, principal.user_id, req.rating,
                                        req.comment or "")
     if status == "ok":
-        return JSONResponse(status_code=204, content=None)
+        # 204 必须【无 body】：JSONResponse 会写出 null 四个字节，真实 uvicorn 直接抛
+        # RuntimeError: Response content longer than Content-Length
+        # （TestClient 容忍它，所以单测发现不了 —— 这条是真实服务器日志抓到的）
+        return Response(status_code=204)
     if status == "not_owner":
         # 与 sessions/messages 一致：不是本人的消息一律 404（不泄露"这条消息存在"）
         return JSONResponse(status_code=404,

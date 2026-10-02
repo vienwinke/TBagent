@@ -75,6 +75,27 @@ def _done(started: float, before: dict[str, Any], *, route: str | None = None,
     return payload
 
 
+# 模型侧失败 → 用户话术。顺序：越具体的越靠前。
+_FRIENDLY_MODEL_ERRORS = (
+    ("预算已耗尽", "模型响应超时了，请再试一次"),
+    ("apitimeout", "模型响应超时了，请再试一次"),
+    ("timed out", "模型响应超时了，请再试一次"),
+    ("timeout", "模型响应超时了，请再试一次"),
+    ("ratelimit", "当前提问较多，请稍后重试"),
+    ("429", "当前提问较多，请稍后重试"),
+    ("jsondecode", "模型返回格式异常，请再试一次"),
+    ("empty", "模型这次没给出内容，请再试一次"),
+)
+
+
+def _friendly_model_error(raw: str) -> str:
+    text = (raw or "").lower()
+    for needle, friendly in _FRIENDLY_MODEL_ERRORS:
+        if needle in text:
+            return friendly
+    return "AI 服务暂时不可用，请稍后重试"
+
+
 def error_event(message: str | None) -> Event:
     """把失败翻译成契约里的错误码（契约 §2.4：可重试性由前端决定）。
 
@@ -86,8 +107,13 @@ def error_event(message: str | None) -> Event:
     model_side = ("生成阶段" in raw or "模型" in raw or "llm" in text
                   or "ratelimit" in text or "429" in text or "apitimeout" in text)
     if model_side:
-        return "error", {"code": "LLM_UNAVAILABLE", "message": raw or "模型不可用",
-                         "retryable": True}
+        # 用户看到的是**人话**，技术细节留给日志/审计：
+        # 原来把 "生成阶段失败: 端到端预算已耗尽，未发起模型调用" 这类内部措辞直接甩给用户，
+        # 界面上就是一句看不懂的报错（实测）。
+        friendly = _friendly_model_error(raw)
+        if friendly != raw:
+            logger.info("[pipeline] 模型侧失败（技术细节）：{}", raw[:200])
+        return "error", {"code": "LLM_UNAVAILABLE", "message": friendly, "retryable": True}
     if "timeout" in text or "超时" in text:
         return "error", {"code": "SQL_TIMEOUT", "message": raw or "执行超时", "retryable": True}
     return "error", {"code": "INTERNAL", "message": raw or "未知错误", "retryable": True}

@@ -124,3 +124,32 @@ def test_privileged_role_gets_admin_prompt():
 def test_guard_stats_recorded():
     r = nl2sql.answer("任务数", llm_fn=stub(GOOD))
     assert r.guard["limit"] == 200 and r.guard["tables"] == ["task"]
+
+
+def test_repair_failure_falls_back_to_first_result():
+    """★ 修复失败不能把已拿到的答案丢掉。
+
+    实测场景：第 1 次生成成功但查到 0 行 → 触发回环修复 → 修复调用超时。
+    修复只是"尽力而为"的增强，此时应**回退到首次结果**（0 行也是有意义的答案），
+    而不是让用户白等一场、最后看到报错。
+    """
+    from agent import nl2sql
+    from agent.policy import Principal
+
+    calls = {"n": 0}
+
+    def flaky_llm(messages):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            # 必须真的返回 0 行，才会触发回环修复（注意 COUNT(*) 会返回 1 行——测试踩过）
+            return {"sql": "SELECT id FROM task WHERE id = -1",
+                    "reason": "第一次（0 行）"}
+        raise RuntimeError("生成阶段失败: 模型调用失败（尝试 2 次）: APITimeoutError")
+
+    r = nl2sql.answer("待接取的任务有几个？", principal=Principal(user_id=7),
+                      llm_fn=flaky_llm, use_cache=False)
+
+    assert r.stage == "done", "修复失败也要给出答案：%s" % r.error
+    assert r.fell_back is True and r.repaired is False, "这是回退，不是修复成功"
+    assert r.query is not None and r.query.get("row_count") == 0, "回退结果应是首次的 0 行"
+    assert calls["n"] >= 2, "确实尝试过修复"

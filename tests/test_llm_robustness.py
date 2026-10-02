@@ -165,3 +165,31 @@ def test_deadline_blocks_retries_beyond_budget(monkeypatch):
                      deadline=_time.time() + 0.05)      # 预算只有 50ms
     assert calls["n"] == 0, "预算已尽就不该再发起调用"
     assert llm_mod.usage().retries == before, "预算耗尽后不得重试"
+
+
+def test_deadline_reserves_budget_for_retry(monkeypatch):
+    """首次尝试不许吃光预算：要给重试留出余量（否则重试只能报"预算已耗尽"）"""
+    import time as _time
+
+    import llm as llm_mod
+
+    seen = {}
+
+    class _Boom:
+        def create(self, **kwargs):
+            seen.setdefault("first_timeout", kwargs.get("timeout"))   # 只看首次尝试
+            raise RuntimeError("APITimeoutError: Request timed out")
+
+    class _Client:
+        chat = type("C", (), {"completions": _Boom()})()
+
+    monkeypatch.setattr(llm_mod, "client", lambda: _Client())
+    monkeypatch.setattr(llm_mod, "LLMError", llm_mod.LLMError, raising=False)
+    monkeypatch.setattr(llm_mod, "_retryable", lambda exc: True)
+
+    import pytest
+    with pytest.raises(Exception):
+        llm_mod.chat([{"role": "user", "content": "hi"}], timeout=10.0,
+                     deadline=_time.time() + 5.0)
+    assert seen["first_timeout"] <= 3.6, \
+        "5s 预算下首次尝试最多 ~3.5s，要给重试留 1.5s；实际 %s" % seen["first_timeout"]

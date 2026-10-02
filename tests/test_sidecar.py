@@ -159,3 +159,63 @@ def test_metrics_counts_denied_requests(client, monkeypatch):
 
     text = client.get("/metrics").text
     assert "tb_requests_total 1" in text and "tb_requests_denied_total 1" in text
+
+
+# ------------------------------------------------------------------ 路由分类器契约（回归）
+def test_classify_llm_contract_is_question_to_route_string(monkeypatch):
+    """回归：`classify_llm` 必须是 **question → 路由字符串**。
+
+    曾经传成 `chat_json`（messages → dict）：route() 拿到 dict、判定失败后**静默退回
+    知识库分支** —— 实测把"我现在可以接取哪些任务"答成了资料检索，而且不报错，极难发现。
+    """
+    import time as _time
+
+    import llm as llm_mod
+    from sidecar import app as sidecar
+
+    monkeypatch.setattr(llm_mod, "chat", lambda messages, **kw: "data")
+    assert sidecar._classify_within_budget("我现在可以接取哪些任务", 10.0,
+                                           _time.time() + 10) == "data"
+
+    monkeypatch.setattr(llm_mod, "chat", lambda messages, **kw: "knowledge")
+    assert sidecar._classify_within_budget("任务有哪些状态？", 10.0,
+                                           _time.time() + 10) == "knowledge"
+
+    def boom(*a, **k):
+        raise RuntimeError("路由模型超时")
+
+    monkeypatch.setattr(llm_mod, "chat", boom)
+    assert sidecar._classify_within_budget("我现在可以接取哪些任务", 10.0,
+                                           _time.time() + 10) == "data", "失败要退回 data，别抛"
+
+
+def test_business_question_routes_to_data_with_classifier():
+    """带业务名词的问题走分类器结果（而不是一律 knowledge）"""
+    from agent import router
+
+    assert router.route("我现在可以接取哪些任务", classify_fn=lambda q: "data") == "data"
+    assert router.route("我现在可以接取哪些任务", classify_fn=lambda q: "knowledge") == "knowledge"
+
+
+def test_route_classifier_has_own_sub_budget(monkeypatch):
+    """分类器要有**独立子预算（含重试）**：否则一次超时+退避会吃掉主预算。
+
+    实测：3 次超时 + 退避（1.4+2.5+4.3s）≈17s，把 20s 端到端预算耗光，
+    生成阶段只能报"预算已耗尽"。
+    """
+    import time as _time
+
+    import llm as llm_mod
+    from sidecar import app as sidecar
+
+    seen = {}
+
+    def capture(messages, **kwargs):
+        seen["deadline"] = kwargs.get("deadline")
+        seen["timeout"] = kwargs.get("timeout")
+        return "data"
+
+    monkeypatch.setattr(llm_mod, "chat", capture)
+    now = _time.time()
+    sidecar._classify_within_budget("我现在可以接取哪些任务", 20.0, now + 20.0)
+    assert seen["deadline"] <= now + 3.1, "分类器子预算应 ≤3s，实际 %.2fs" % (seen["deadline"] - now)

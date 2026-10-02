@@ -189,7 +189,8 @@ def test_budget_exhaustion_degrades_honestly(client, monkeypatch):
     monkeypatch.setenv("SIDECAR_TIMEOUT_MS", "300")
 
     def slow(messages):
-        time.sleep(0.5)
+        # 必须超过「预算 + 1.5s 收尾宽限」，否则结果会在宽限内就绪、被正常返回
+        time.sleep(2.0)
         return GOOD
 
     monkeypatch.setattr(sidecar, "DEPS", Deps(nl2sql_llm=slow,
@@ -223,7 +224,7 @@ def test_timeout_reports_tokens_already_burned(monkeypatch):
         scope.calls += 1
         scope.prompt_tokens += 800
         scope.completion_tokens += 40
-        time.sleep(1.2)                  # 再拖过预算
+        time.sleep(2.0)                  # 拖过「预算 + 收尾宽限」才算真超时
         return {"sql": "SELECT COUNT(*) AS c FROM task WHERE deleted = 0",
                 "reason": "慢", "tables": ["task"]}
 
@@ -249,3 +250,93 @@ def test_timeout_reports_tokens_already_burned(monkeypatch):
     done = _json.loads(match.group(1))
     assert done.get("timeout") is True, done
     assert done["tokens"] >= 840, "超时也要报出已消耗的 token：%s" % done["tokens"]
+
+
+# ------------------------------------------------------------------ 204 必须无 body（真实服务器才会报）
+def test_204_responses_have_no_body(monkeypatch):
+    """204 带 body 会让真实 uvicorn 抛 `Response content longer than Content-Length`
+    （TestClient 容忍它，所以这条必须显式断言 body 为空 —— 实测踩到过）。"""
+    monkeypatch.setenv("SIDECAR_DEV_PRINCIPAL", "2:USER")
+    monkeypatch.delenv("SIDECAR_JWT_SECRET", raising=False)
+    monkeypatch.setenv("SESSION_ENABLED", "true")
+    monkeypatch.setenv("SESSION_DB_NAME", "treatbord_test")
+    sidecar.LIMITER.reset()
+    c = TestClient(sidecar.app)
+
+    deleted = c.delete("/v1/ai/sessions/999999")          # 不存在 → 404（有 body 是正常的）
+    assert deleted.status_code == 404 and deleted.content
+
+    # 反馈：先造一条真实消息再点赞，拿到 204
+    import json as _json
+    import re as _re
+    from agent.pipeline import Deps
+    monkeypatch.setattr(sidecar, "DEPS", Deps(
+        nl2sql_llm=lambda m: {"sql": "SELECT COUNT(*) AS c FROM task WHERE deleted = 0",
+                              "reason": "t", "tables": ["task"]},
+        summary_llm=lambda m: "共 8 个任务。"))
+    res = c.post("/v1/ai/chat", json={"session_id": "s-204-body",
+                                      "question": "待接取的任务有几个？",
+                                      "client_msg_id": "n204"})
+    solved = _re.search(r"event: saved\ndata: (.*)", res.text)
+    if solved is None:                                     # 未开启会话存储时跳过
+        pytest.skip("会话存储未开启，拿不到 message_id")
+    mid = int(_json.loads(solved.group(1))["message_id"])
+    fb = c.post("/v1/ai/feedback", json={"message_id": mid, "rating": 1})
+    assert fb.status_code == 204
+    assert fb.content == b"", "204 不能带 body：%r" % fb.content
+
+
+def test_error_frame_is_still_followed_by_done(monkeypatch):
+    """契约要求 `done` 收尾：错误路径也不能少。
+
+    边车原先"见到 error 就 break"，把 pipeline 随后发的 done 吞掉了 ——
+    客户端只能干等连接关闭（实测真实链路里看到只有 error 没有 done）。
+    """
+    from agent.pipeline import Deps
+
+    def failing_llm(messages):
+        raise RuntimeError("生成阶段失败: 边端预算已耗尽")
+
+    monkeypatch.setenv("SIDECAR_DEV_PRINCIPAL", "2:USER")
+    monkeypatch.delenv("SIDECAR_JWT_SECRET", raising=False)
+    monkeypatch.setattr(sidecar, "DEPS", Deps(nl2sql_llm=failing_llm))
+    sidecar.LIMITER.reset()
+    sidecar.STATS.reset()
+
+    res = TestClient(sidecar.app).post("/v1/ai/chat",
+                                       json={"session_id": "s-done", "question": "待接取的任务有几个？",
+                                             "client_msg_id": "d1"})
+    events = [ln.split(":", 1)[1].strip() for ln in res.text.splitlines() if ln.startswith("event:")]
+    assert "error" in events, events
+    assert events[-1] == "done", "error 之后必须仍有 done 收尾：%s" % events
+
+
+def test_result_ready_at_deadline_is_still_delivered(monkeypatch):
+    """收尾宽限：pipeline 恰好在预算边界拿到结果时，要**把答案给用户**，不能抢先报超时。
+
+    实测真实链路里差 1ms：pipeline 完成回退、答案已就绪，边车却先判定"预算耗尽"。
+    """
+    import time as _time
+
+    from agent.pipeline import Deps
+
+    def slow_but_ok(messages):
+        _time.sleep(0.45)                      # 比预算略慢，但会成功
+        return {"sql": "SELECT COUNT(*) AS c FROM task WHERE deleted = 0",
+                "reason": "慢但成功", "tables": ["task"]}
+
+    monkeypatch.setenv("SIDECAR_DEV_PRINCIPAL", "2:USER")
+    monkeypatch.setenv("SIDECAR_TIMEOUT_MS", "300")     # 预算 0.3s < 0.45s
+    monkeypatch.delenv("SIDECAR_JWT_SECRET", raising=False)
+    monkeypatch.setattr(sidecar, "DEPS", Deps(nl2sql_llm=slow_but_ok,
+                                              summary_llm=lambda m: "共 8 个任务。"))
+    sidecar.LIMITER.reset()
+    sidecar.STATS.reset()
+
+    res = TestClient(sidecar.app).post("/v1/ai/chat",
+                                       json={"session_id": "s-grace", "question": "待接取的任务有几个？",
+                                             "client_msg_id": "g1"})
+    events = [ln.split(":", 1)[1].strip() for ln in res.text.splitlines() if ln.startswith("event:")]
+    assert "done" in events, events
+    assert "error" not in events, "结果已就绪就不该报超时：%s" % events
+    assert "共 8 个任务" in res.text or "查询结果" in res.text

@@ -221,8 +221,12 @@ def chat(
             remaining = deadline - time.time()
             if remaining <= 0.2:                     # 预算已尽：不再开新尝试
                 break
-            if timeout is None or remaining < timeout:
-                kwargs["timeout"] = remaining         # 单次超时不许越过总截止时间
+            # 给重试**留一点余量**：否则首次尝试会把剩余预算吃光，
+            # 回环自修复只能报"预算已耗尽、未发起调用"（实测单次 7.5s 吃掉 8s 预算）
+            reserve = 1.5 if attempt < LLM.max_retries else 0.0
+            budget_for_attempt = max(0.5, remaining - reserve)
+            if timeout is None or budget_for_attempt < timeout:
+                kwargs["timeout"] = budget_for_attempt
         attempts = attempt + 1
         started = time.time()
         try:

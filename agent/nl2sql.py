@@ -73,6 +73,7 @@ class Nl2SqlResult:
     rows: list[dict[str, Any]] = field(default_factory=list)
     attempts: int = 0
     repaired: bool = False
+    fell_back: bool = False           # 修复失败 → 回退到首次成功的结果（不是修复成功）
     cache_hit: bool = False                              # 是否命中"问题→SQL"缓存（省掉生成调用）
     isolated: bool = False                               # 是否做了行级隔离（USER 视角为 True）
     scope: str | None = None                             # 语义层判定的数据范围（SELF/MARKET/…）
@@ -202,7 +203,8 @@ def answer(
         after = llm_mod.usage().summary()
         r.usage = {k: after[k] - usage_before.get(k, 0)
                    for k in ("calls", "prompt_tokens", "completion_tokens", "total_tokens", "retries")}
-        r.repaired = r.attempts > 1 and r.ok
+        # 只有"真的用修复后的结果回答"才算 repaired；回退到首次结果不算
+        r.repaired = r.attempts > 1 and r.ok and not r.fell_back
         return r
 
     # 0) ★ 语义层范围判定：必须在缓存之前 —— 被判定越权的问题既不查缓存也不生成。
@@ -243,6 +245,10 @@ def answer(
     error: str | None = None
     prev_sql: str | None = None
     kind: str | None = None
+    # 首次成功的执行结果（SQL + 结果集）：修复失败时**回退到它**，
+    # 而不是把已经拿到的答案丢掉 —— 修复是"尽力而为"的增强，不该成为"全有或全无"。
+    fallback: tuple[str, Any, Any] | None = None
+
     for attempt in range(max_repair + 1):
         res.attempts = attempt + 1
         # 3) 生成（嵌入版提示词包：带身份策略前置 + {{ME}} 占位符 + 定向回环）
@@ -298,6 +304,7 @@ def answer(
             continue
 
         res.query, res.rows = qr.summary(), qr.as_dicts()
+        fallback = (rw.sql, rw, qr)                 # 本轮可用：留作修复失败时的退路
         if use_cache:
             # ★ 只缓存**重写前**的 SQL（带身份的重写结果绝不能复用给他人）
             cache_mod.cache().put(question, sql, tables=res.tables, top_k=top_k, scope=cache_scope)
@@ -312,9 +319,17 @@ def answer(
     if res.stage == "denied":
         pass                          # 拒答（语义层 / 策略层 / 模型主动）：保留 stage/error/deny_reason
     elif res.stage != "done":
-        res.stage, res.error = "failed", error
-        if prev_sql:
-            res.sql = prev_sql
+        if fallback is not None:
+            # 修复失败，但此前已有可执行且成功返回的结果（哪怕 0 行）→ 回退，别让用户白等一场
+            res.sql, _rw, qr = fallback
+            res.query, res.rows = qr.summary(), qr.as_dicts()
+            res.stage, res.error, res.fell_back = "done", None, True
+            logger.info("[nl2sql] 修复失败，回退到首次成功的结果（{} 行）：{}", qr.row_count,
+                        str(error)[:120])
+        else:
+            res.stage, res.error = "failed", error
+            if prev_sql:
+                res.sql = prev_sql
 
     return _finish(res)
 
