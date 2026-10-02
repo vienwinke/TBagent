@@ -134,4 +134,6 @@ data/         schema.json · schema_index.json · snapshot.sqlite · knowledge/ 
 | Java 侧接入骨架（SSE 代理 / 内部 JWT / 逐行转发） | ✅ 编译+单测通过；跨语言吊销闭环已实测 |
 | P4 角色化运营版 · P5 上线加固 | ⬜ |
 
-> 验收门禁（CI 四道，全部退出码阻断）：`ruff check` → 密钥扫描 → 越权红线 54 条 → 回归 293 条。
+> 验收门禁（CI 五道，全部退出码阻断）：`ruff check` → 密钥扫描 → 越权红线 54 条 →
+> 回归 372 条（sqlite 快照）→ **MySQL 类型/DDL 子集**（另起空库 + 最小 fixture，
+> 跑那些 sqlite 下会被跳过的用例 —— 金额 `Decimal` 与时间类型的缺陷只有真 MySQL 才抓得到）。

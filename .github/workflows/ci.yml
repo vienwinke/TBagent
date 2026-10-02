@@ -39,3 +39,61 @@ jobs:
 
       - name: 单元 / 集成回归
         run: python -m pytest -q
+
+  mysql-types:
+    # 为什么单独这一个任务：CI 主门禁用 sqlite 快照（快、无需服务），但 sqlite
+    # **没有 Decimal、也不是 MySQL 方言** —— 恰好是"类型类缺陷"的盲区。
+    # 实测代价：金额列（Decimal）让 SSE 序列化中途崩掉、上游只看到"边车不可达"，
+    # 而 CI 一直是绿的。这里起一个空 MySQL + 最小 fixture，把那些用例真正跑起来。
+    name: MySQL 类型/DDL 子集（sqlite 下会被跳过的用例）
+    runs-on: ubuntu-latest
+    services:
+      mysql:
+        image: mysql:8.4
+        env:
+          MYSQL_ROOT_PASSWORD: ci-root
+          MYSQL_DATABASE: tb_ci
+          MYSQL_USER: ci
+          MYSQL_PASSWORD: ci
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="mysqladmin ping -h 127.0.0.1 -uci -pci"
+          --health-interval=5s --health-timeout=5s --health-retries=20
+    env:
+      DB_BACKEND: mysql
+      DB_HOST: 127.0.0.1
+      DB_PORT: "3306"
+      DB_NAME: tb_ci
+      DB_USER: ci
+      DB_PASSWORD: ci
+      # 这些用例会真写库；库名必须指向本次的 CI 空库（不是本地的 treatbord_test）
+      TEST_DB_NAME: tb_ci
+      AUDIT_ENABLED: "true"
+      SESSION_ENABLED: "true"
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: 安装依赖
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements-dev.txt
+
+      - name: 建表（ai_* 真实 DDL + 最小业务 fixture）
+        run: |
+          mysql -h127.0.0.1 -uci -pci tb_ci < sql/ai_tables.sql
+          mysql -h127.0.0.1 -uci -pci tb_ci < sql/test_fixture.sql
+          echo "--- 已建表 ---"
+          mysql -h127.0.0.1 -uci -pci tb_ci -e "SHOW TABLES"
+
+      - name: MySQL 专属子集（本地 sqlite 跑时会被跳过的那些）
+        # 只选 fixture 能满足的文件；test_eval_baseline 需要**完整业务库**，
+        # 由开发者在本机（连真实 MySQL）验证，见 docs/开发环境.md
+        run: |
+          python -m pytest tests/test_audit.py tests/test_session.py \
+            tests/test_cost_report.py tests/test_sidecar_sessions.py \
+            tests/test_jsonable.py -q

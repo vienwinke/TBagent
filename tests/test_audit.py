@@ -9,12 +9,17 @@ from __future__ import annotations
 
 import json
 import re
+import os
 import sys
 from pathlib import Path
 
 import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+# 测试写库统一走 TEST_DB：CI 的库名不是 treatbord_test（空库 fixture）
+# 使用方式：TEST_DB=treatbord_test（本地）· TEST_DB=tb_ci（CI）
+TEST_DB = os.getenv("TEST_DB_NAME", "treatbord_test")
 
 from agent import audit as audit_mod  # noqa: E402
 from agent import pipeline  # noqa: E402
@@ -144,7 +149,7 @@ needs_mysql = pytest.mark.skipif(IS_SQLITE, reason="审计落库需要真实 MyS
 def test_record_writes_real_row(monkeypatch):
     """真写一行到 treatbord_test 再读回来（不给生产库添数据）"""
     monkeypatch.setenv("AUDIT_ENABLED", "true")
-    monkeypatch.setenv("AUDIT_DB_NAME", "treatbord_test")
+    monkeypatch.setenv("AUDIT_DB_NAME", TEST_DB)
     row = audit_mod.AuditRow(trace_id="pytest-audit-1", user_id=7, question="审计自检",
                              route="data", scope="SELF", verdict="ok",
                              detected_tables=["task"], generated_sql=SQL, rewritten_sql=SQL,

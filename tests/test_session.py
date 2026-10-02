@@ -8,6 +8,7 @@
 """
 from __future__ import annotations
 
+import os
 import sys
 import uuid
 from pathlib import Path
@@ -15,6 +16,10 @@ from pathlib import Path
 import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+# 测试写库统一走 TEST_DB：CI 的库名不是 treatbord_test（空库 fixture）
+# 使用方式：TEST_DB=treatbord_test（本地）· TEST_DB=tb_ci（CI）
+TEST_DB = os.getenv("TEST_DB_NAME", "treatbord_test")
 
 from agent import session as sess  # noqa: E402
 from config import IS_SQLITE  # noqa: E402
@@ -26,7 +31,7 @@ needs_mysql = pytest.mark.skipif(IS_SQLITE, reason="会话落库需要真实 MyS
 def store(monkeypatch):
     """打开会话开关 + 指向测试库，并在结束后清理本用例造的数据"""
     monkeypatch.setenv("SESSION_ENABLED", "true")
-    monkeypatch.setenv("SESSION_DB_NAME", "treatbord_test")
+    monkeypatch.setenv("SESSION_DB_NAME", TEST_DB)
     ext = "pytest-sess-%s" % uuid.uuid4().hex[:8]
     yield ext
     # 清理：按 external_id 找到会话，删消息与会话

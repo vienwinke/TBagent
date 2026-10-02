@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import re
+import os
 import sys
 import time
 import uuid
@@ -19,6 +20,10 @@ import pytest
 from fastapi.testclient import TestClient
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+# 测试写库统一走 TEST_DB：CI 的库名不是 treatbord_test（空库 fixture）
+# 使用方式：TEST_DB=treatbord_test（本地）· TEST_DB=tb_ci（CI）
+TEST_DB = os.getenv("TEST_DB_NAME", "treatbord_test")
 
 from agent import session as sess  # noqa: E402
 from agent.pipeline import Deps  # noqa: E402
@@ -46,7 +51,7 @@ def headers(user_id: int, role: str = "USER") -> dict:
 def client(monkeypatch):
     monkeypatch.setenv("SIDECAR_JWT_SECRET", SECRET)
     monkeypatch.setenv("SESSION_ENABLED", "true")
-    monkeypatch.setenv("SESSION_DB_NAME", "treatbord_test")
+    monkeypatch.setenv("SESSION_DB_NAME", TEST_DB)
     monkeypatch.delenv("SIDECAR_DEV_PRINCIPAL", raising=False)
     monkeypatch.setattr(sidecar, "DEPS", Deps(
         nl2sql_llm=lambda m: {"sql": SQL, "reason": "t", "tables": ["task"]},

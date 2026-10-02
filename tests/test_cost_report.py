@@ -5,12 +5,17 @@
 """
 from __future__ import annotations
 
+import os
 import sys
 from pathlib import Path
 
 import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+# 测试写库统一走 TEST_DB：CI 的库名不是 treatbord_test（空库 fixture）
+# 使用方式：TEST_DB=treatbord_test（本地）· TEST_DB=tb_ci（CI）
+TEST_DB = os.getenv("TEST_DB_NAME", "treatbord_test")
 
 from config import IS_SQLITE  # noqa: E402
 from scripts import cost_report  # noqa: E402
@@ -22,7 +27,7 @@ TRACE = "pytest-cost-report"
 
 @needs_mysql
 def test_aggregate_by_user_and_day(monkeypatch):
-    monkeypatch.setenv("AUDIT_DB_NAME", "treatbord_test")
+    monkeypatch.setenv("AUDIT_DB_NAME", TEST_DB)
     conn = cost_report.connect()
     rows = [
         (TRACE + "-1", 7, 100, 10, 0.0010, "ok", 0),
