@@ -340,3 +340,42 @@ def test_result_ready_at_deadline_is_still_delivered(monkeypatch):
     assert "done" in events, events
     assert "error" not in events, "结果已就绪就不该报超时：%s" % events
     assert "共 8 个任务" in res.text or "查询结果" in res.text
+
+
+# ------------------------------------------------------------------ 中途崩溃：可读收尾 + 审计留痕
+def test_midstream_exception_is_audited_and_closed_cleanly(monkeypatch):
+    """pipeline 中途抛异常时：
+
+    ① 不能再让异常冲出生成器（Starlette 会掐连接 → 上游只看到"边车不可达: closed"）；
+    ② 必须补一条审计 —— 正常路径的审计事件在流末尾，崩溃时永远不会发出，
+       于是"出问题的请求恰恰查不到"（实测踩到）。
+    """
+
+    from agent import audit as audit_mod
+
+    # 直接让事件流"发出 meta 后崩掉"：模拟边车这一层遇到未预期异常
+    # （注：模型函数抛错会被 pipeline 自己接住，测不到边车这层）
+    def exploding_stream(*args, **kwargs):
+        yield "meta", {"trace_id": "t-crash"}
+        raise TypeError("Object of type Decimal is not JSON serializable")
+
+    monkeypatch.setenv("SIDECAR_DEV_PRINCIPAL", "2:USER")
+    monkeypatch.delenv("SIDECAR_JWT_SECRET", raising=False)
+    monkeypatch.setattr(sidecar.pipeline, "answer_stream", exploding_stream)
+    sidecar.LIMITER.reset()
+    sidecar.STATS.reset()
+
+    audited = []
+    monkeypatch.setattr(audit_mod, "enabled", lambda: True)
+    monkeypatch.setattr(audit_mod, "record", lambda row: audited.append(row) or True)
+
+    res = TestClient(sidecar.app).post("/v1/ai/chat",
+                                       json={"session_id": "s-crash", "question": "任务赏金一共有多少",
+                                             "client_msg_id": "c1"})
+    events = [ln.split(":", 1)[1].strip() for ln in res.text.splitlines() if ln.startswith("event:")]
+    assert res.status_code == 200, "不该变成 500"
+    assert "error" in events and events[-1] == "done", "崩溃也要按协议收尾：%s" % events
+    assert "AI 服务处理异常" in res.text
+    assert audited, "崩溃的请求必须留下审计"
+    assert audited[0].verdict == audit_mod.VERDICT_FAILED
+    assert audited[0].deny_reason == "STREAM_ERROR"

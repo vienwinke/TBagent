@@ -145,9 +145,21 @@ def principal_from_request(request: Request) -> Principal:
 _assert_no_identity_fields()      # 启动即断言（契约 §2.2）
 
 
+def _json_fallback(obj: Any) -> str:
+    """最后一道保险：出现非 JSON 原生值时**不要崩掉整条流**。
+
+    执行层已统一归一化（`agent/executor.py: jsonable`），这里只兜"新代码路径漏了某个类型"。
+    宁可少一个字段的精度，也不能让用户看到"边车不可达" —— 实测崩溃就是这样发生的。
+    """
+    logger.warning("[sidecar] SSE 帧里出现非 JSON 原生值 {}，已兜底成字符串（请修上游归一化）",
+                   type(obj).__name__)
+    return str(obj)
+
+
 def _sse(event: str, data: dict[str, Any]) -> str:
     """SSE 帧：event: <name> + data: <json>（契约 §2.3）"""
-    return "event: %s\ndata: %s\n\n" % (event, json.dumps(data, ensure_ascii=False))
+    return "event: %s\ndata: %s\n\n" % (
+        event, json.dumps(data, ensure_ascii=False, default=_json_fallback))
 
 
 def _deps_for(budget_s: float) -> Deps | None:
@@ -183,6 +195,26 @@ def _deps_for(budget_s: float) -> Deps | None:
         #    知识库分支（实测把"我现在可以接取哪些任务"答成了资料检索）。
         classify_llm=lambda question: _classify_within_budget(question, remaining, deadline),
     )
+
+
+def _audit_failure(trace_id: str | None, principal: Principal, question: str,
+                   session_ref: int | None, *, reason: str, latency_ms: int,
+                   tokens: int = 0, cost: float = 0.0) -> None:
+    """为**崩溃/超时**的请求补一条最小审计行。
+
+    正常路径的审计由 pipeline 的 `_audit` 事件驱动，而那条事件在流末尾 ——
+    请求中途崩掉时它永远不会发出，于是"失败的请求恰恰在审计表里查不到"（实测）。
+    best-effort：写失败只记日志，绝不能影响正在收尾的响应。
+    """
+    if not audit_mod.enabled():
+        return
+    try:
+        audit_mod.record(audit_mod.AuditRow(
+            trace_id=trace_id or "-", user_id=principal.user_id, session_id=session_ref,
+            question=question, verdict=audit_mod.VERDICT_FAILED, deny_reason=reason,
+            latency_ms=latency_ms, prompt_tokens=tokens or None, cost_yuan=cost or None))
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("[sidecar] 补审计失败（不影响响应）：{}: {}", type(exc).__name__, str(exc)[:120])
 
 
 def _classify_within_budget(question: str, remaining: float, deadline: float) -> str:
@@ -222,6 +254,7 @@ def _stream(req: ChatRequest, principal: Principal, trace_id: str | None, idem_k
     # 但 pipeline 可能正好在这一刻拿到结果（实测差 1ms —— 用户看到超时，而答案已就绪）。
     # 宽限 1.5s 仍小于上游读超时的余量（timeout-ms + 2000ms），所以不会把上游拖爆。
     hard_deadline = deadline + 1.5
+    started_at = time.monotonic()
     chunks: list[str] = []
     denied = error = False
     tokens, cost = 0, 0.0
@@ -270,6 +303,24 @@ def _stream(req: ChatRequest, principal: Principal, trace_id: str | None, idem_k
                 event, data = ctx.run(next, events)
             except StopIteration:
                 break
+            except Exception as exc:  # noqa: BLE001
+                # pipeline 中途抛异常（实测过 Decimal 序列化、DB 抖动等）：
+                # 原先异常冲出生成器 → Starlette 掐掉连接 → 上游只看到"边车不可达: closed"，
+                # 排查方向被完全带偏；而且这类失败**不落审计**。
+                # 现在：记审计 + 给可读的 error/done，让客户端按协议收尾。
+                logger.error("[sidecar] 事件流中断：{}: {}", type(exc).__name__, str(exc)[:200])
+                error = True
+                _audit_failure(trace_id, principal, req.question, session_ref,
+                               reason="STREAM_ERROR",
+                               latency_ms=int((time.monotonic() - started_at) * 1000))
+                yield emit("error", {"code": "INTERNAL",
+                                     "message": "AI 服务处理异常，请稍后重试",
+                                     "retryable": True})
+                yield emit("done", {"elapsed_ms": int((time.monotonic() - started_at) * 1000),
+                                    "route": route, "denied": False, "tokens": tokens,
+                                    "cost_yuan": cost, "cache_hit": False, "repaired": False,
+                                    "attempts": 0})
+                break
             if event == "done":
                 denied = bool(data.get("denied"))
                 tokens, cost = int(data.get("tokens", 0)), float(data.get("cost_yuan", 0.0))
@@ -295,6 +346,10 @@ def _stream(req: ChatRequest, principal: Principal, trace_id: str | None, idem_k
                 # 给用户的还是人话（技术细节在日志里）：内部的"预算耗尽/第 N 次失败"措辞
                 # 直接甩到界面上，用户只会一脸问号（实测）。
                 logger.warning("[sidecar] 端到端预算 {}ms 耗尽，向用户降级", int(budget_s * 1000))
+                _audit_failure(trace_id, principal, req.question, session_ref,
+                               reason="TIMEOUT",
+                               latency_ms=int((time.monotonic() - started_at) * 1000),
+                               tokens=tokens, cost=cost)
                 yield emit("error", {"code": "LLM_UNAVAILABLE",
                                      "message": "模型响应超时了，请再试一次",
                                      "retryable": True})
