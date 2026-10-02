@@ -23,6 +23,7 @@ import llm as llm_mod
 from agent import cache as cache_mod
 from agent import executor as ex
 from agent import policy
+from agent import prompt_registry
 from agent import prompts_user
 from agent import scope as scope_mod
 from agent.policy import ROLE_ADMIN, Principal
@@ -256,9 +257,12 @@ def answer(
         # 3) 生成（嵌入版提示词包：带身份策略前置 + {{ME}} 占位符 + 定向回环）
         res.stage = "generate"
         try:
+            # 提示词灰度：按 user_id 确定性分桶（同一用户始终同一版本）
+            active_prompt = prompt_registry.resolve(str(principal.user_id))
             raw = call_llm(prompts_user.nl2sql_messages(
                 schema_text, question, principal,
-                error=error, prev_sql=prev_sql, kind=kind))
+                error=error, prev_sql=prev_sql, kind=kind,
+                extra_instruction=active_prompt.content))
             sql, reason, refuse_reason = _extract(raw)
         except Exception as exc:  # noqa: BLE001
             error, res.stage = "生成阶段失败: %s" % str(exc)[:200], "generate"

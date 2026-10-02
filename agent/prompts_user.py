@@ -278,6 +278,7 @@ def nl2sql_messages(
     prev_sql: str | None = None,
     kind: str | None = None,
     fewshot: bool | None = None,
+    extra_instruction: str | None = None,
 ) -> list[dict[str, str]]:
     """构造 NL2SQL 消息；error/kind 用于回环修复（按失败类型定向回灌）"""
     # 判据必须用 is_privileged（运营及以上），不能用 is_admin：
@@ -291,6 +292,11 @@ def nl2sql_messages(
         domain_rules=domain_rules(),
         rules=NL2SQL_ADMIN_RULES if privileged else NL2SQL_USER_RULES,
     )
+    if extra_instruction and extra_instruction.strip():
+        # 来自 ai_prompt_version.content 的灰度指令（见 agent/prompt_registry.py）。
+        # 刻意**追加**而不是替换 system：替换意味着一次糟糕的灰度能把整个提示词打穿；
+        # 追加时最坏情况只是多一段不生效的指令。
+        system += "\n\n【附加指令（来自提示词灰度配置）】\n" + extra_instruction.strip()
     user = "【用户问题】\n【输入】%s【/输入】" % question
     if fewshot if fewshot is not None else nl2sql_fewshot_enabled():
         user = nl2sql_fewshot_block() + "\n\n" + user

@@ -29,7 +29,7 @@ import llm as llm_mod
 from config import LLM
 from agent import answer as answer_mod
 from agent import chart as chart_mod
-from agent import nl2sql, policy, prompts_user, rag, router
+from agent import nl2sql, policy, prompt_registry, prompts_user, rag, router
 from agent import scope as scope_mod
 from agent.policy import Principal
 
@@ -257,8 +257,11 @@ def _answer_stream(question: str, principal: Principal, *,
     started = time.time()
     before = llm_mod.usage().summary()
 
+    # 上报**实际命中**的版本（含 ai_prompt_version 灰度选中的那个）——
+    # A/B 指标要靠它对账：只报内置版本的话，两个组的样本根本分不开
     yield "meta", {"trace_id": trace, "session_id": session_id,
-                   "prompt_version": prompts_user.PROMPT_VERSION,
+                   "prompt_version": prompt_registry.resolve(
+                       str(principal.user_id)).version,
                    "policy_version": policy.POLICY_VERSION, "model": LLM.model}
 
     # 0) 多轮指代消解（仅当有历史）：先补全成可独立执行的问题
