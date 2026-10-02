@@ -225,7 +225,9 @@ def answer(
             try:
                 # ★ 缓存里存的是**重写前**的 SQL：命中后仍然重新过策略层（唯一出口）
                 rw_cached = policy.rewrite(hit["sql"], principal)
-                qr_cached = policy.execute(rw_cached, check_cost=False)
+                # 护栏③ 必须同样生效（历史 bug：此处曾传 check_cost=False，
+                # 于是这一层在缓存路径上从来没跑过）
+                qr_cached = policy.execute(rw_cached)
                 res.sql, res.guard = rw_cached.sql, rw_cached.guard
                 res.query, res.rows = qr_cached.summary(), qr_cached.as_dicts()
                 res.reason = "缓存命中：复用上次生成的 SQL（数据为本次重新执行）"
@@ -294,9 +296,12 @@ def answer(
             break
 
         # 4) 执行（护栏②③在 executor 内：只读会话 + 超时 + EXPLAIN 限额）
+        #    历史 bug：这里曾传 check_cost=False —— 上一条注释写着"护栏③在 executor 内"，
+        #    下一行却把它关掉了，导致护栏③ 长期是死代码。
+        #    超限会抛 SqlCostError → _error_kind 映射成 too_expensive → 定向回环收窄范围。
         res.stage = "execute"
         try:
-            qr = policy.execute(rw, check_cost=False)
+            qr = policy.execute(rw)
         except ex.SqlError as exc:
             error, prev_sql = "执行失败: %s" % exc, rw.sql
             kind = _error_kind(exc)

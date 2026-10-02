@@ -164,26 +164,28 @@ def _mysql_error(exc: pymysql.err.MySQLError) -> SqlError:
     return SqlError("SQL 被拒绝/执行失败 [MySQL %s]%s: %s" % (code, hint, msg))
 
 
-def explain_rows(cur, sql: str) -> int:
+def explain_rows(cur, sql: str) -> int | None:
     """护栏③：EXPLAIN 预估扫描行数（各步骤 rows 相乘的保守估计）
 
-    SQLite 不提供行数估算（EXPLAIN QUERY PLAN 不含 rows），演示快照下跳过该层，
-    依赖 LIMIT + 超时兜底；真实评估仍在 MySQL 上启用。
+    返回 **None 表示本后端无法估算**，调用方必须显式跳过该层 —— 绝不能把 None 当 0：
+    历史实现在 sqlite 下返回 0，于是"估算过了、很便宜"是假象，而演示与 CI 用的
+    恰恰是 sqlite 快照，这层护栏在演示环境等于不存在（已修）。
+    MySQL 下若 EXPLAIN 未给出任何 rows 估算，同样返回 None，不谎报廉价。
     """
     if IS_SQLITE:
-        return 0
+        return None
     cur.execute("EXPLAIN " + sql)
     cols = [d[0] for d in cur.description]
     idx = cols.index("rows") if "rows" in cols else None
     if idx is None:
-        return 0
+        return None
     total, seen = 1, 0
     for row in cur.fetchall():
         value = row[idx]
         if value:
             total *= int(value)
             seen += 1
-    return 0 if seen == 0 else total
+    return None if seen == 0 else total
 
 
 def sensitive_positions(sql: str, columns: Sequence[str]) -> tuple[list[int], list[str]]:
@@ -279,9 +281,15 @@ def execute_readonly(
                 if check_cost:
                     est = explain_rows(cur, sql)
                     result.explain_rows = est
-                    threshold = row_limit or GUARD.explain_row_limit
-                    if est > threshold:
-                        raise SqlCostError("EXPLAIN 预估扫描 %d 行，超过阈值 %d，已拒绝执行" % (est, threshold))
+                    if est is None:
+                        # 显式声明"这层没生效"，而不是让 None 冒充 0 行的廉价查询
+                        logger.warning(
+                            "[guard] 本后端无法估算扫描行数，护栏③（EXPLAIN 限额）本次跳过: {}", sql[:120])
+                    else:
+                        threshold = row_limit or GUARD.explain_row_limit
+                        if est > threshold:
+                            raise SqlCostError("EXPLAIN 预估扫描 %d 行，超过阈值 %d，已拒绝执行"
+                                               % (est, threshold))
                 cur.execute(sql)
                 if cur.description is None:
                     raise SqlError("该语句没有返回结果集（疑似写操作或 DDL），已拒绝")

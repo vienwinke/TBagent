@@ -143,7 +143,12 @@ class GuardConfig:
 
     max_rows: int = int(_env("SQL_MAX_ROWS", "200") or 200)
     timeout_ms: int = int(_env("SQL_TIMEOUT_MS", "3000") or 3000)
-    explain_row_limit: int = int(_env("SQL_EXPLAIN_ROW_LIMIT", "100000") or 100000)
+    # 护栏③ 阈值（EXPLAIN 预估扫描行数上限）。定值依据（2026-10-02 实测）：
+    # 把 eval/cases.yaml 的 56 条可执行 reference_sql 在真实 treatbord 库上跑 EXPLAIN，
+    # 合法查询估算 min=1 / p50=8 / p90=22 / max=800。
+    # 历史值 100 会误杀 4 条正常聚合；而 100000 等于永不触发（这层因此长期形同虚设）。
+    # 10000 对实测上限留 >12× 余量，同时仍能拦住笛卡尔积类的爆炸查询。
+    explain_row_limit: int = int(_env("SQL_EXPLAIN_ROW_LIMIT", "10000") or 10000)
     schema_top_k: int = int(_env("SCHEMA_TOP_K", "5") or 5)
     embed_backend: str = _env("EMBED_BACKEND", "bm25")
 
