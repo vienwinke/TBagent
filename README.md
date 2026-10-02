@@ -50,7 +50,7 @@ cd ~/Project/agent
 # 边车（可选，服务化形态）：本地起服务并 curl 事件流
 # pip install -r requirements-sidecar.txt
 # SIDECAR_JWT_SECRET=dev-secret python -m sidecar.app  # 配密钥后只认 Bearer JWT；不配则一律 503
-# curl -N -X POST localhost:8080/v1/ai/chat -H 'Content-Type: application/json' \
+# curl -N -X POST localhost:8081/v1/ai/chat -H 'Content-Type: application/json' \
 #      -d '{"session_id":"s1","question":"我接了几个任务？"}'
 
 python3 -m venv .venv && . .venv/bin/activate

@@ -607,7 +607,9 @@ def main() -> None:
     import uvicorn
 
     host = os.getenv("SIDECAR_HOST", "127.0.0.1")
-    port = int(os.getenv("SIDECAR_PORT", "8080") or 8080)
+    # 默认 8081 而不是 8080：treatbord 的 server.port 也是 8080，
+    # 同机开发时两个默认值会直接抢端口（实测 [Errno 98] address already in use）。
+    port = int(os.getenv("SIDECAR_PORT", "8081") or 8081)
     if not auth_configured() and host not in ("127.0.0.1", "localhost"):
         logger.warning("[sidecar] 未配置 SIDECAR_JWT_SECRET 却绑定 {}：/v1/ai/chat 会一律 503，"
                        "请先完成 P1 的鉴权再对外暴露", host)
