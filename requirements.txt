@@ -1,12 +1,19 @@
 # ===== 运行时必需（轻量：Streamlit Cloud 免费版可顺利安装）=====
-streamlit>=1.36.0
-pandas>=2.2.0
-openai>=1.30.0
-python-dotenv>=1.0.0
-SQLAlchemy>=2.0.0
-PyMySQL>=1.1.0
-sqlglot>=25.0.0
-rank-bm25>=0.2.2
-numpy>=1.26.0
-loguru>=0.7.0
-PyYAML>=6.0
+#
+# ⚠️ 直接依赖一律 `==` 精确固定（版本取自"全部门禁通过"的那个环境）。
+#    为什么必须固定：EX / 延迟 / 成本那批指标对 sqlglot 的解析行为、
+#    pandas 的类型推断、openai SDK 的重试语义都很敏感 —— 用 `>=` 的话，
+#    半年后别人 clone 下来跑出的数字和 README 对不上，也就谈不上可复现。
+#    本机逐字节复现请用 requirements.lock（含完整传递依赖）。
+#    改版本请同时更新本文件与 requirements.lock，并跑 scripts/check_pins.py。
+streamlit==1.64.0
+pandas==3.0.6
+openai==3.19.2
+python-dotenv==1.2.3
+SQLAlchemy==2.1.1
+PyMySQL==1.2.3
+sqlglot==30.20.0
+rank-bm25==0.2.2
+numpy==2.5.3
+loguru==0.7.3
+PyYAML==6.0.3

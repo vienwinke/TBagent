@@ -1,6 +1,7 @@
 # ===== 开发/测试依赖（不需要部署到云端）=====
+# ⚠️ 直接依赖同样精确固定，理由见 requirements.txt 顶部
 -r requirements.txt
 -r requirements-sidecar.txt
-pytest>=8.0.0
-httpx>=0.27            # fastapi TestClient 依赖
-ruff>=0.6              # 代码质量门禁（E9 语法类 + F pyflakes）
+pytest==9.1.1
+httpx==0.28.1          # fastapi TestClient 依赖
+ruff==0.16.9           # 代码质量门禁（E9 语法类 + F pyflakes）

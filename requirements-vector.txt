@@ -1,6 +1,10 @@
 # ===== 可选：本地向量检索（BGE + FAISS，约 1GB 含 torch CPU）=====
 # Streamlit Cloud 免费版不建议安装（安装容易超时/超限）；公开演示用默认的 BM25 即可。
 # 本地启用：pip install -r requirements-vector.txt 且 .env 设 EMBED_BACKEND=local
+#
+# ⚠️ 本文件**刻意不锁版本**：它是可选组件，没有纳入门禁环境（CI 跑 BM25），
+#    因此无法从"门禁通过的环境"导出可信版本；且 torch 当前没有 3.14 轮子，
+#    锁了反而会挡住启用路径。真正启用本地向量时请自行固定并补进 requirements.lock。
 -r requirements.txt
 sentence-transformers>=3.0.0
 faiss-cpu>=1.8.0
