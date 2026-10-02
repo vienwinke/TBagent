@@ -20,7 +20,11 @@ import threading
 import time
 from typing import Protocol
 
-PREFIX = "tb:ai:jti:"
+# ⚠️ 必须与 treatbord 侧已有的键一致：Java 的 TokenBlacklistService 用的是
+# `token:blacklist:<jti>`（登出、封禁、注销全部走它）。原先这里用 `tb:ai:jti:` ——
+# 结果就是"用户登出了，边车还能用旧 token 继续查 5 分钟"（跨仓库集成断层，实测发现）。
+# 可用 SIDECAR_JTI_PREFIX 覆盖（例如隔离测试或换部署）。
+DEFAULT_PREFIX = "token:blacklist:"
 
 
 def _env(name: str, default: str = "") -> str:
@@ -67,11 +71,12 @@ class MemoryDenylist:
 class RedisDenylist:
     """Redis 实现（多副本共享；**写入方是 treatbord**）"""
 
-    def __init__(self, url: str) -> None:
+    def __init__(self, url: str, *, prefix: str | None = None) -> None:
         import redis
 
         self._redis = redis.Redis.from_url(url, decode_responses=True,
                                            socket_connect_timeout=2, socket_timeout=2)
+        self._prefix = prefix or _env("SIDECAR_JTI_PREFIX") or DEFAULT_PREFIX
 
     def backend(self) -> str:
         return "redis"
@@ -80,7 +85,7 @@ class RedisDenylist:
         if not jti:
             return False
         try:
-            return bool(self._redis.exists(PREFIX + jti))
+            return bool(self._redis.exists(self._prefix + jti))
         except Exception as exc:  # noqa: BLE001
             from loguru import logger
 
@@ -91,10 +96,18 @@ class RedisDenylist:
             return False
 
     def revoke(self, jti: str, ttl_sec: int) -> None:
-        self._redis.set(PREFIX + jti, 1, ex=max(1, ttl_sec))
+        self._redis.set(self._prefix + jti, 1, ex=max(1, ttl_sec))
 
-    def reset(self) -> None:
-        for key in self._redis.scan_iter(match=PREFIX + "*", count=200):
+    def reset(self, *, force: bool = False) -> None:
+        """清空本前缀下的黑名单 —— **仅用于测试**。
+
+        默认前缀（`token:blacklist:`）是 treatbord 生产在用的键：误用它清理等于
+        "把所有人集体解封"。所以非测试前缀之外，必须显式 force=True。
+        """
+        if self._prefix == DEFAULT_PREFIX and not force:
+            raise RuntimeError("拒绝清空生产前缀 %s（测试请传独立的 prefix，或显式 force=True）"
+                               % DEFAULT_PREFIX)
+        for key in self._redis.scan_iter(match=self._prefix + "*", count=200):
             self._redis.delete(key)
 
 

@@ -72,7 +72,7 @@ L1/L2 契约里的 `session_id` 是**字符串**，而表内关联一律用 BIGI
 | `exp` | ≤ 5 分钟；管理员降权后旧 token 最长 5 分钟内仍有效 → 要即时生效就把 `jti` 放 Redis 黑名单 |
 | 其他 | **不接受任何客户端自带的 `user_id` 字段或 `X-User-Id` 头**；边车启动时断言请求 schema 里不存在该字段（`_assert_no_identity_fields()`） |
 | 实现状态 | ✅ 已实现（`sidecar/auth.py`）：**算法锁定只认 HS256**（拒绝 `alg=none` 与 RS256→HS256 混淆）、签名常量时间比较、`sub` 必须正整数、`role` 限三档、`aud` 必须含 `ai-sidecar`、`exp` 未过期且**签发时长 ≤ 5 分钟**、`iat` 不在未来（5s 时钟容差）；失败按 §2.4 返回 401 `UNAUTHENTICATED` |
-| `jti` 黑名单 | ✅ **已实现**（2026-10-01）：边车校验 JWT 时查 Redis（`tb:ai:jti:<jti>`），**写入方是 treatbord（Java）** —— 降权/登出时 `SET tb:ai:jti:<jti> 1 EX <ttl>` 即可即时生效，不必等 5 分钟过期。Redis 抖动默认 **fail-open**（放行）以免黑名单变成新单点；要 fail-closed 设 `SIDECAR_DENYLIST_FAIL_CLOSED=true` |
+| `jti` 黑名单 | ✅ **已实现**（2026-10-01）：边车校验 JWT 时查 Redis，键为 **`token:blacklist:<jti>`** —— **必须与 treatbord 的 `TokenBlacklistService` 用同一个键**（登出/封禁/注销都走它）。⚠️ 由此推出一条硬约束：**Java 签发的内部 JWT 必须沿用调用方当前会话的 `jti`**，否则登出后边车仍能用旧 token 继续查（最长 5 分钟窗口）。原文：**写入方是 treatbord（Java）** —— 降权/登出时 `SET tb:ai:jti:<jti> 1 EX <ttl>` 即可即时生效，不必等 5 分钟过期。Redis 抖动默认 **fail-open**（放行）以免黑名单变成新单点；要 fail-closed 设 `SIDECAR_DENYLIST_FAIL_CLOSED=true` |
 
 ### 2.3 SSE 事件
 

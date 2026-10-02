@@ -144,6 +144,9 @@ def test_sidecar_works_with_redis_backend(monkeypatch):
     monkeypatch.setenv("SIDECAR_REDIS_URL", REDIS_URL)
     monkeypatch.setenv("SIDECAR_DEV_PRINCIPAL", "7:USER")
     monkeypatch.setattr(sidecar, "LIMITER", limiter_mod.make_limiter())
+    # 自带清理：Redis 里的并发计数/幂等键可能被上一次中断的进程留下（TTL 60s 才自愈），
+    # 不清理就会出现"偶发 429 / 偶发重放"的假失败 —— 测试不能依赖外部残留状态。
+    sidecar.LIMITER.reset()
     monkeypatch.setattr(sidecar, "DEPS", Deps(
         nl2sql_llm=lambda m: {"sql": "SELECT COUNT(*) AS c FROM task WHERE deleted = 0",
                               "reason": "t", "tables": ["task"]},
@@ -169,7 +172,8 @@ def test_redis_denylist_is_shared_across_replicas():
     """treatbord（Java）写入黑名单，边车必须立刻看到 —— 否则降权还有 5 分钟窗口"""
     from sidecar.denylist import RedisDenylist
 
-    a, b = RedisDenylist(REDIS_URL), RedisDenylist(REDIS_URL)
+    prefix = "tb:test:jti:%s:" % uuid.uuid4().hex[:8]      # 隔离前缀：绝不碰生产键
+    a, b = RedisDenylist(REDIS_URL, prefix=prefix), RedisDenylist(REDIS_URL, prefix=prefix)
     jti = "test-jti-%s" % uuid.uuid4().hex[:8]
     assert b.is_revoked(jti) is False
     a.revoke(jti, ttl_sec=60)
@@ -191,7 +195,8 @@ def test_revoked_token_rejected_end_to_end(monkeypatch):
     monkeypatch.setenv("SIDECAR_JWT_SECRET", secret)
     monkeypatch.delenv("SIDECAR_DEV_PRINCIPAL", raising=False)
     monkeypatch.setenv("SIDECAR_REDIS_URL", REDIS_URL)
-    monkeypatch.setattr(sidecar, "DENYLIST", denylist_mod.RedisDenylist(REDIS_URL))
+    prefix = "tb:test:jti:%s:" % uuid.uuid4().hex[:8]
+    monkeypatch.setattr(sidecar, "DENYLIST", denylist_mod.RedisDenylist(REDIS_URL, prefix=prefix))
     monkeypatch.setattr(sidecar, "DEPS", Deps(
         nl2sql_llm=lambda m: {"sql": "SELECT COUNT(*) AS c FROM task WHERE deleted = 0",
                               "reason": "t", "tables": ["task"]},
@@ -215,3 +220,26 @@ def test_revoked_token_rejected_end_to_end(monkeypatch):
     finally:
         sidecar.DENYLIST.reset()
         sidecar.LIMITER.reset()
+
+
+def test_denylist_prefix_matches_treatbord_production_key():
+    """跨仓库集成对齐（必须钉住，否则登出对边车不生效）：
+
+    treatbord 的 TokenBlacklistService 用 `token:blacklist:<jti>`（登出/封禁/注销都走它），
+    边车必须查**同一个键**。这条测试就是为了防止有人随手改成自己的前缀。
+    """
+    from sidecar.denylist import DEFAULT_PREFIX
+
+    assert DEFAULT_PREFIX == "token:blacklist:", DEFAULT_PREFIX
+
+
+def test_reset_refuses_to_wipe_production_prefix(monkeypatch):
+    """防误用：默认前缀是生产键，清空等于把所有人集体解封"""
+    from sidecar.denylist import DEFAULT_PREFIX, MemoryDenylist, RedisDenylist
+
+    if not _redis_ok():
+        pytest.skip("需要 Redis")
+    limiter_obj = RedisDenylist(REDIS_URL, prefix=DEFAULT_PREFIX)
+    with pytest.raises(RuntimeError, match="拒绝清空生产前缀"):
+        limiter_obj.reset()
+    MemoryDenylist().reset()          # 内存后端不受限
