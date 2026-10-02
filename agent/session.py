@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from typing import Any
 
 from loguru import logger
@@ -173,17 +174,49 @@ def delete_session(session_id: int, user_id: int) -> bool:
     return True
 
 
-def save_feedback(message_id: int, user_id: int, rating: int, comment: str = "") -> bool:
-    """`POST /v1/ai/feedback` —— best-effort；rating 只接受 1/-1"""
-    if not enabled() or rating not in (1, -1):
-        return False
+# 评论脱敏（保守兜底，不是完备的 DLP）：评论是**用户自由文本**，
+# 完全可能贴手机号、邮箱或一串密钥 —— 与"审计类表不记录敏感值"的原则冲突。
+# 这里只挡住最典型的三类；真正的 DLP 应在更上游做。
+_COMMENT_REDACTIONS = [
+    (re.compile(r"[A-Za-z0-9_\-]{32,}"), "[已脱敏]"),          # 长不透明串（密钥/token）
+    (re.compile(r"[\w.+-]+@[\w-]+\.[\w.]+"), "[已脱敏]"),      # 邮箱
+    (re.compile(r"1[3-9]\d{9}"), "[已脱敏]"),                    # 手机号
+]
+
+
+def sanitize_comment(comment: str, *, limit: int = 255) -> str:
+    """评论入库前清洗：去控制字符 → 遮蔽典型敏感值 → 截断"""
+    text = "".join(ch for ch in (comment or "") if ch == "\n" or ch >= " ")
+    for pattern, replacement in _COMMENT_REDACTIONS:
+        text = pattern.sub(replacement, text)
+    return text[:limit]
+
+
+def save_feedback(message_id: int, user_id: int, rating: int, comment: str = "") -> str:
+    """`POST /v1/ai/feedback` —— best-effort，返回状态字符串供上层映射状态码。
+
+    返回值：`ok` / `not_owner`（这条回答不是该用户的）/ `disabled`（未开会话存储）/ `failed`。
+
+    ★ 归属校验是必须的：`ai_feedback` 的主键是 `message_id` 且用 `ON DUPLICATE KEY UPDATE`
+    覆盖，不校验归属的话，用户 A 拿别人的 message_id 提交就能**改掉 B 的评价**
+    （行内 user_id 还留在 B 名下，数据被改却记在别人头上）。
+    """
+    if not enabled():
+        return "disabled"
+    if rating not in (1, -1):
+        return "failed"
     try:
         with _connect() as conn, conn.cursor() as cur:
+            cur.execute("SELECT 1 FROM ai_chat_message WHERE id=%s AND user_id=%s",
+                        (message_id, user_id))
+            if cur.fetchone() is None:
+                logger.warning("[session] 反馈被拒：消息 {} 不属于用户 {}", message_id, user_id)
+                return "not_owner"
             cur.execute("INSERT INTO ai_feedback (message_id, user_id, rating, comment)"
                         " VALUES (%s,%s,%s,%s)"
                         " ON DUPLICATE KEY UPDATE rating=VALUES(rating), comment=VALUES(comment)",
-                        (message_id, user_id, rating, (comment or "")[:255]))
-        return True
+                        (message_id, user_id, rating, sanitize_comment(comment)))
+        return "ok"
     except Exception as exc:  # noqa: BLE001
         logger.warning("[session] 反馈落库失败：{}: {}", type(exc).__name__, str(exc)[:140])
-        return False
+        return "failed"

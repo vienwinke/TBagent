@@ -187,8 +187,16 @@ def chat(
     json_mode: bool = False,
     tag: str = "",
     timeout: float | None = None,
+    deadline: float | None = None,
 ) -> str:
-    """一次对话调用（含重试与用量统计），返回模型文本"""
+    """一次对话调用（含重试与用量统计），返回模型文本。
+
+    `deadline`（绝对时间戳，time.time()）：本请求的**总截止时刻**。
+    只给单次 `timeout` 是不够的 —— 重试会让总耗时变成 "N×timeout + 退避"，
+    于是"边车 8s 预算"实际能跑到 11s，把上游（Java/SseEmitter）的耐心耗光，
+    表现为上游报连接被关闭，而边车还在傻等（真实踩到过）。
+    给了 deadline 后：每次尝试的超时都会被剩余时间夹住，且过期不再重试。
+    """
     use_model = model or LLM.model
     kwargs: dict[str, Any] = {"model": use_model, "messages": messages, "temperature": temperature}
     if max_tokens:
@@ -209,6 +217,12 @@ def chat(
     attempts = 0
     last_exc: BaseException | None = None
     for attempt in range(LLM.max_retries + 1):
+        if deadline is not None:
+            remaining = deadline - time.time()
+            if remaining <= 0.2:                     # 预算已尽：不再开新尝试
+                break
+            if timeout is None or remaining < timeout:
+                kwargs["timeout"] = remaining         # 单次超时不许越过总截止时间
         attempts = attempt + 1
         started = time.time()
         try:
@@ -236,11 +250,15 @@ def chat(
             last_exc = exc
             if attempt >= LLM.max_retries or not _retryable(exc):
                 break
+            if deadline is not None and time.time() >= deadline:
+                break                                # 预算已尽：不再重试（诚实降级交给上层）
             usage().retries += 1
             wait = min(2 ** attempt + random.uniform(0, 0.5), 20)
             logger.warning("[llm] 第 {} 次失败({})，{}s 后重试: {}", attempt + 1, type(exc).__name__, wait,
                            str(exc)[:120])
             time.sleep(wait)
+    if attempts == 0 and deadline is not None:
+        raise LLMError("端到端预算已耗尽，未发起模型调用")
     raise LLMError("模型调用失败（尝试 %d 次）: %s: %s" % (attempts, type(last_exc).__name__,
                                                               str(last_exc)[:200])) from last_exc
 

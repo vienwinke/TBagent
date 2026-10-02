@@ -51,6 +51,8 @@ String issueAiToken(long userId, String role, String sessionJti) {   // ★ sess
    极难定位（最后靠抓包才看到）。修法：`HttpClient.newBuilder().version(HTTP_1_1)`。
 2. **键名必须 snake_case**：请求体走 L2 契约（`session_id` / `client_msg_id` / `message_id`），
    Java record 上要加 `@JsonProperty`，否则序列化成 camelCase → 边车 **422**。
+4. **边车的 4xx 语义要透传**：`proxy` 里不要把一切非 2xx 都折成 502 ——
+   "这条会话/回答不是你的"（404）折成 502 后，前端看到的是"服务异常"，排查方向就全错了。
 3. **`RestClient` 的 `spec.body(x)` 返回的是新对象**，不接住等于没挂 body（同样表现为 422 且 body 为空）。
    另外错误信息要带上响应体，否则只有状态码，排查只能靠猜。
 

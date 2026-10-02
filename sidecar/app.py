@@ -159,15 +159,20 @@ def _deps_for(budget_s: float) -> Deps | None:
     if DEPS is not None:
         return DEPS
     remaining = max(1.0, budget_s - 1.0)      # 给 SQL 执行与转述留 1s
+    # ★ 总截止时刻也要给：只设单次 timeout 挡不住"重试" —— 实测 8s 预算会跑到 ~11s，
+    #   把上游（Java 读超时 / SseEmitter）的耐心耗光，上游报连接被关闭而边车还在傻等。
+    #   有了 deadline，每次尝试的超时被剩余时间夹住，且预算耗尽后不再重试。
+    deadline = time.time() + budget_s
     return Deps(
-        nl2sql_llm=lambda messages: llm_mod.chat_json(messages, tag="nl2sql", timeout=remaining),
+        nl2sql_llm=lambda messages: llm_mod.chat_json(messages, tag="nl2sql", timeout=remaining,
+                                                      deadline=deadline),
         summary_llm=lambda messages: llm_mod.chat(messages, temperature=0, max_tokens=256,
                                                   tag="summary", model=LLM.model_cheap,
-                                                  timeout=remaining),
+                                                  timeout=remaining, deadline=deadline),
         # 多轮指代消解也是"便宜档"的活：输入是短对话，输出一个 JSON
         rewrite_llm=lambda messages: llm_mod.chat_json(messages, tag="rewrite",
                                                        model=LLM.model_cheap,
-                                                       timeout=remaining),
+                                                       timeout=remaining, deadline=deadline),
     )
 
 
@@ -469,8 +474,19 @@ def feedback(req: FeedbackRequest, request: Request) -> Any:
                                      "retryable": False})
     if not session_mod.enabled():
         return _session_disabled()
-    session_mod.save_feedback(req.message_id, principal.user_id, req.rating, req.comment or "")
-    return JSONResponse(status_code=204, content=None)
+    status = session_mod.save_feedback(req.message_id, principal.user_id, req.rating,
+                                       req.comment or "")
+    if status == "ok":
+        return JSONResponse(status_code=204, content=None)
+    if status == "not_owner":
+        # 与 sessions/messages 一致：不是本人的消息一律 404（不泄露"这条消息存在"）
+        return JSONResponse(status_code=404,
+                            content={"code": "NOT_FOUND", "message": "回答不存在",
+                                     "retryable": False})
+    # 落库失败不再假装成功：用户点了评价却没存上，必须让他知道
+    return JSONResponse(status_code=500,
+                        content={"code": "FEEDBACK_FAILED", "message": "反馈保存失败，请稍后重试",
+                                 "retryable": True})
 
 
 def main() -> None:

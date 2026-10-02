@@ -135,3 +135,33 @@ def test_malformed_without_json_object_keeps_diagnostic(monkeypatch):
         llm.chat_json([{"role": "user", "content": "hi"}])
 
     assert "未返回合法 JSON" in str(exc.value)
+
+
+def test_deadline_blocks_retries_beyond_budget(monkeypatch):
+    """预算耗尽后不再重试：否则 8s 预算会跑到 11s，把上游的耐心耗光（真实故障）"""
+    import time as _time
+
+    import llm as llm_mod
+
+    calls = {"n": 0}
+
+    class _Boom:
+        def create(self, **kwargs):
+            calls["n"] += 1
+            raise RuntimeError("APITimeoutError: Request timed out")
+
+    class _Client:
+        chat = type("C", (), {"completions": _Boom()})()
+
+    monkeypatch.setattr(llm_mod, "client", lambda: _Client())
+    monkeypatch.setattr(llm_mod.LLM, "api_key", "test-key", raising=False)
+    monkeypatch.setattr(llm_mod, "LLMError", llm_mod.LLMError, raising=False)
+    monkeypatch.setattr(llm_mod, "_retryable", lambda exc: True)
+
+    import pytest
+    before = llm_mod.usage().retries
+    with pytest.raises(Exception):
+        llm_mod.chat([{"role": "user", "content": "hi"}], timeout=1.0,
+                     deadline=_time.time() + 0.05)      # 预算只有 50ms
+    assert calls["n"] == 0, "预算已尽就不该再发起调用"
+    assert llm_mod.usage().retries == before, "预算耗尽后不得重试"

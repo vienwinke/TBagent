@@ -8,6 +8,8 @@
 """
 from __future__ import annotations
 
+import json
+import re
 import sys
 import time
 import uuid
@@ -135,18 +137,36 @@ def test_delete_session_removes_messages(client):
 
 
 # ------------------------------------------------------------------ 反馈
+def _saved_message_id(text: str) -> int:
+    """从 SSE 文本里取 saved 事件的 message_id"""
+    match = re.search(r"event: saved\ndata: (.*)", text)
+    assert match, "没有 saved 帧：\n" + text[:300]
+    return int(json.loads(match.group(1))["message_id"])
+
+
 @needs_mysql
-def test_feedback_accepts_only_valid_rating(client):
-    c, _ = client
-    mid = int(uuid.uuid4().int % 1_000_000) + 900_000
+def test_feedback_end_to_end_with_ownership(client):
+    """👍 走完整链路：saved 事件给出 message_id → 本人 204 · 他人 **404** · 非法 rating 400"""
+    c, ext = client
+    res = c.post("/v1/ai/chat", headers=headers(7),
+                 json={"session_id": ext, "question": "待接取的任务有几个？",
+                       "client_msg_id": "fb-1"})
+    mid = _saved_message_id(res.text)
     try:
         assert c.post("/v1/ai/feedback", headers=headers(7),
                       json={"message_id": mid, "rating": 1, "comment": "有用"}).status_code == 204
         assert c.post("/v1/ai/feedback", headers=headers(7),
                       json={"message_id": mid, "rating": -1}).status_code == 204
+        # 他人不得改这条评价（也不该知道它存在）
+        others = c.post("/v1/ai/feedback", headers=headers(8),
+                        json={"message_id": mid, "rating": -1, "comment": "踩别人一下"})
+        assert others.status_code == 404 and others.json()["code"] == "NOT_FOUND"
         bad = c.post("/v1/ai/feedback", headers=headers(7),
                      json={"message_id": mid, "rating": 5})
-        assert bad.status_code == 400 and bad.json()["code"] == "BAD_REQUEST"
+        assert bad.status_code == 400
+        with sess._connect() as conn, conn.cursor() as cur:
+            cur.execute("SELECT user_id, rating FROM ai_feedback WHERE message_id=%s", (mid,))
+            assert cur.fetchone() == (7, -1), "他人的提交不得改动这一行"
     finally:
         with sess._connect() as conn, conn.cursor() as cur:
             cur.execute("DELETE FROM ai_feedback WHERE message_id=%s", (mid,))

@@ -119,11 +119,41 @@ def test_session_endpoints_semantics(store):
 
 
 @needs_mysql
-def test_feedback_upsert(store):
-    assert sess.save_feedback(999001, 7, 1, "有用") is True
-    assert sess.save_feedback(999001, 7, -1, "改主意了") is True      # 同一 message 覆盖
-    assert sess.save_feedback(999001, 7, 5) is False, "rating 只接受 1/-1"
+def test_feedback_requires_ownership(store):
+    """★ 归属校验：不能拿别人的 message_id 提交反馈。
+
+    `ai_feedback` 的主键是 message_id 且用 ON DUPLICATE KEY UPDATE 覆盖 ——
+    没有归属校验时，用户 8 提交一次就能**改掉用户 7 的评价**（且行内 user_id 仍是 7）。
+    """
+    ext = store
+    sid7 = sess.resolve(ext, 7, question="我接了几个任务？")
+    message_id = sess.append_turn(sid7, 7, "我接了几个任务？", "你接了 8 个任务。")
+    assert message_id
+
+    assert sess.save_feedback(message_id, 8, -1, "别人的消息我也能踩") == "not_owner"
+    assert sess.save_feedback(message_id, 7, 1, "有用") == "ok"
+    assert sess.save_feedback(message_id, 7, -1, "改主意了") == "ok"        # 覆盖为最新
+    assert sess.save_feedback(message_id, 7, 5) == "failed"                # rating 只接受 1/-1
+
     with sess._connect() as conn, conn.cursor() as cur:
-        cur.execute("SELECT rating, comment FROM ai_feedback WHERE message_id=%s", (999001,))
-        assert cur.fetchone() == (-1, "改主意了")
-        cur.execute("DELETE FROM ai_feedback WHERE message_id=%s", (999001,))
+        cur.execute("SELECT user_id, rating, comment FROM ai_feedback WHERE message_id=%s",
+                    (message_id,))
+        assert cur.fetchone() == (7, -1, "改主意了"), "非本人的提交不得改动这一行"
+        cur.execute("DELETE FROM ai_feedback WHERE message_id=%s", (message_id,))
+        cur.execute("DELETE FROM ai_chat_message WHERE id=%s", (message_id,))
+    assert sess.save_feedback(message_id, 7, 1) == "not_owner", "消息已删除，不能再反馈"
+
+
+def test_comment_is_sanitized_before_storing():
+    """评论是自由文本，入库前要遮掉典型敏感值（手机号/邮箱/长密钥串）"""
+    # 假密钥**运行时拼接**：文件里不留完整密钥形态，免得被仓库自己的密钥门禁误报
+    fake_key = "sk-" + "a1b2c3d4e5f6g7h8i9j0k1l2m3n4o5p6"
+    raw = "找我 13812345678 或 a@b.com，密钥 " + fake_key
+    cleaned = sess.sanitize_comment(raw)
+    assert "13812345678" not in cleaned and "a@b.com" not in cleaned
+    assert fake_key not in cleaned and fake_key[:12] not in cleaned
+    assert cleaned.count("[已脱敏]") == 3
+    # 截断：用带空格的长句（连续 400 个 x 本身形似长密钥，会被遮蔽——那是预期行为）
+    assert len(sess.sanitize_comment("很长的评论 " * 60)) == 255
+    assert sess.sanitize_comment("x" * 400) == "[已脱敏]", "长不透明串按密钥处理"
+    assert "\x07" not in sess.sanitize_comment("a\x07b"), "控制字符要清掉"
