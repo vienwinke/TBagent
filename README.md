@@ -10,7 +10,7 @@
 | 在线演示 | https://tbagent-cqpsjwkvdqcwvaiqgbyusz.streamlit.app/ |
 | 本地运行 | `streamlit run app.py` → http://localhost:8501 |
 | 部署步骤 | [docs/部署.md](docs/部署.md)（Cloud / HF Spaces / Docker 三选一） |
-| 评估报告 | [docs/评估报告.md](docs/评估报告.md)（数据分支 EX 90.2% · 知识分支命中率 100%） |
+| 评估报告 | [docs/评估报告.md](docs/评估报告.md)（数据分支 EX 82.3% / 宽松 86.3%，历史最好 90.2% · 知识分支命中率 100%） |
 | 面试讲稿 | [docs/面试讲稿.md](docs/面试讲稿.md) |
 
 ## 为什么这个项目值得看（面试向）
@@ -118,8 +118,9 @@ data/         schema.json · schema_index.json · snapshot.sqlite · knowledge/ 
 - [x] M2 NL2SQL + 三层护栏 + 回环修复（护栏单测 16/16 危险 SQL 全拦截；回环修复 5 类场景通过）
 - [x] M3 知识库 RAG + 三分类路由（**命中率 100% / 拒答率 100% / 引用覆盖 100%**）
 - [x] M4 自动图表 + Streamlit 界面（`agent/chart.py` 选图规则 + `app.py`，含成本面板与护栏提示）
-- [x] M5 60 条评估集 + 跑分 + 消融（**EX 严格 90.2% / 宽松 94.1%**；危险操作执行率 0%；脱敏 100%）
-- [ ] M6 部署 + README 指标表 + 演示视频
+- [x] M5 60 条评估集 + 跑分 + 消融（**EX 严格 82.3% / 宽松 86.3%**，历史最好 90.2%；危险操作执行率 0%；脱敏 100%）
+- [x] M6 部署 + README 指标表（[docs/部署.md](docs/部署.md)：Cloud / HF Spaces / Docker 三选一）
+- [ ] M6 演示视频
 
 ### 嵌入路线（treatbord 生产化）进度
 
